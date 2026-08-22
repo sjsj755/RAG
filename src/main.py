@@ -30,8 +30,8 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="多模态 RAG API",
-    description="基于 PaddleOCR-VL + Qwen 的 PDF 智能问答系统",
+    title="数学 RAG API",
+    description="基于 PaddleOCR-VL + Qwen 的数学 PDF 智能问答系统",
     version="1.0.0",
     lifespan=lifespan,
 )

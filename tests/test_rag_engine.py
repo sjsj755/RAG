@@ -59,9 +59,11 @@ class FakeEmbedder:
 def test_build_index_and_search(monkeypatch, tmp_path):
     monkeypatch.setattr(settings, "chroma_persist_dir", str(tmp_path / "chroma"))
 
-    engine = RAGEngine(collection_name="default")
-    engine.parser = FakeParser()
-    engine.embedder = FakeEmbedder()
+    engine = RAGEngine(
+        collection_name="default",
+        parser=FakeParser(),
+        embedder=FakeEmbedder(),
+    )
 
     result = engine.build_index("fake.pdf")
     assert result["total_chunks"] == 3

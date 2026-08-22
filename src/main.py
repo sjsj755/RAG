@@ -11,9 +11,12 @@ from fastapi.staticfiles import StaticFiles
 
 from src.api.routes import router
 from src.core.config import settings
-from src.utils.logger import logger
+from src.utils.logger import configure_logger, logger
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
+
+# 装配点：根据配置初始化日志（控制台 + 文件）
+configure_logger(settings.log_level, settings.log_dir)
 
 
 @asynccontextmanager

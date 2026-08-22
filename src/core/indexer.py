@@ -4,20 +4,25 @@ from typing import Any
 
 import chromadb
 
-from src.core.config import settings
+from src.core.config import Settings, get_settings
 from src.utils.helpers import ensure_dir
 from src.utils.logger import logger
 
 
 class VectorIndexer:
-    def __init__(self, collection_name: str = "default") -> None:
+    def __init__(
+        self,
+        collection_name: str = "default",
+        config: Settings | None = None,
+    ) -> None:
+        cfg = config or get_settings()
         self.collection_name = collection_name
 
         # 确保持久化目录存在
-        ensure_dir(settings.chroma_persist_dir)
+        ensure_dir(cfg.chroma_persist_dir)
 
         self.client = chromadb.PersistentClient(
-            path=settings.chroma_persist_dir,
+            path=cfg.chroma_persist_dir,
             settings=chromadb.config.Settings(anonymized_telemetry=False),
         )
         self._ensure_collection()

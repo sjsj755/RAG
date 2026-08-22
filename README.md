@@ -23,18 +23,21 @@
 │   ├── run.py                # 开发服务器（--reload）
 │   ├── api/
 │   │   ├── routes.py         # REST 路由
-│   │   └── dependencies.py   # 依赖注入（单例）
+│   │   └── dependencies.py   # 依赖注入（配置/服务/存储装配点）
 │   ├── core/
 │   │   ├── config.py         # pydantic-settings 配置
 │   │   ├── models.py         # Pydantic 数据模型
 │   │   ├── parser.py         # PaddleOCR-VL 解析器
 │   │   ├── embedding.py      # Qwen Embedding（批处理+重试）
 │   │   ├── indexer.py        # ChromaDB 向量索引器
+│   │   ├── protocols.py      # 组件接口（依赖注入用 Protocol）
 │   │   └── rag_engine.py     # 解析→向量→索引协调引擎
 │   ├── services/
-│   │   └── knowledge_base.py # 知识库服务（注册表+生命周期）
+│   │   ├── knowledge_base.py     # 知识库服务（注册表+生命周期）
+│   │   ├── document_repository.py # 文档注册表持久化
+│   │   └── file_storage.py        # PDF 文件存储（原子写入）
 │   └── utils/
-│       ├── logger.py         # loguru 配置
+│       ├── logger.py         # loguru 配置（启动时装配）
 │       └── helpers.py        # 通用工具
 ├── scripts/
 │   └── check_embedding_models.py

@@ -2,19 +2,20 @@ import time
 
 from openai import OpenAI
 
-from src.core.config import settings
+from src.core.config import Settings, get_settings
 from src.utils.logger import logger
 
 
 class EmbeddingGenerator:
-    def __init__(self):
+    def __init__(self, config: Settings | None = None) -> None:
+        cfg = config or get_settings()
         self.client = OpenAI(
-            api_key=settings.qwen_api_key,
-            base_url=settings.qwen_base_url,
+            api_key=cfg.qwen_api_key,
+            base_url=cfg.qwen_base_url,
             timeout=60.0,
         )
-        self.model = settings.qwen_embedding_model
-        self.batch_size = settings.embedding_batch_size
+        self.model = cfg.qwen_embedding_model
+        self.batch_size = cfg.embedding_batch_size
 
     def embed(self, texts: list[str], max_retries: int = 3) -> list[list[float]]:
         """批量生成向量，带重试机制"""

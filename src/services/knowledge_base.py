@@ -1,14 +1,16 @@
 """知识库服务：管理多文档的注册表（持久化）与索引生命周期。"""
 
-import json
 import threading
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
-from src.core.config import settings
+import chromadb
+
+from src.core.config import Settings, get_settings
 from src.core.models import DocumentInfo, DocumentStatus
 from src.core.rag_engine import RAGEngine
+from src.services.document_repository import DocumentRepository
 from src.utils.helpers import ensure_dir, generate_document_id
 from src.utils.logger import logger
 
@@ -16,79 +18,52 @@ from src.utils.logger import logger
 class KnowledgeBaseService:
     """多文档知识库服务。
 
-    - 文档元数据持久化到 JSON 文件，服务重启后不丢失；
-    - 每个文档对应一个独立 Chroma 集合（doc_<id>）；
+    - 文档元数据通过 DocumentRepository 持久化，服务重启后不丢失；
+    - 每个文档对应一个独立 Chroma 集合（与 doc_id 同名）；
     - 删除文档时同步删除集合与注册表记录。
     """
 
     def __init__(
         self,
+        config: Settings | None = None,
         registry_path: str | Path | None = None,
         engine_factory: Callable[[str], RAGEngine] | None = None,
         reconcile: bool = True,
     ) -> None:
-        self._registry_path = Path(registry_path or settings.registry_file)
+        self._config = config or get_settings()
+        self._repository = DocumentRepository(
+            registry_path or self._config.registry_file
+        )
         self._engine_factory = engine_factory or (
-            lambda doc_id: RAGEngine(collection_name=doc_id)
+            lambda doc_id: RAGEngine(
+                collection_name=doc_id, config=self._config
+            )
         )
         self._engines: dict[str, RAGEngine] = {}
         self._lock = threading.RLock()
-        ensure_dir(settings.upload_dir)
-        self._documents: dict[str, DocumentInfo] = self._load_registry()
+        ensure_dir(self._config.upload_dir)
+        self._documents: dict[str, DocumentInfo] = self._repository.load()
         if reconcile:
             self._cleanup_orphan_collections()
-
-    # ---------- 注册表持久化 ----------
-
-    def _load_registry(self) -> dict[str, DocumentInfo]:
-        """从 JSON 文件加载文档注册表。"""
-        if not self._registry_path.exists():
-            return {}
-        try:
-            raw = json.loads(self._registry_path.read_text(encoding="utf-8"))
-            return {
-                doc_id: DocumentInfo(**data)
-                for doc_id, data in raw.items()
-            }
-        except (json.JSONDecodeError, TypeError, ValueError) as e:
-            logger.error(f"文档注册表损坏，已重置: {e}")
-            return {}
-
-    def _save_registry(self) -> None:
-        """原子写入文档注册表。"""
-        ensure_dir(self._registry_path.parent)
-        tmp_path = self._registry_path.with_suffix(".json.tmp")
-        tmp_path.write_text(
-            json.dumps(
-                {
-                    doc_id: doc.model_dump(mode="json")
-                    for doc_id, doc in self._documents.items()
-                },
-                ensure_ascii=False,
-                indent=2,
-            ),
-            encoding="utf-8",
-        )
-        tmp_path.replace(self._registry_path)
 
     def _cleanup_orphan_collections(self) -> None:
         """删除注册表中已不存在的 doc_* 集合，避免数据无限膨胀。"""
         try:
-            import chromadb
-
             client = chromadb.PersistentClient(
-                path=settings.chroma_persist_dir,
+                path=self._config.chroma_persist_dir,
                 settings=chromadb.config.Settings(anonymized_telemetry=False),
             )
             for collection in client.list_collections():
                 name = getattr(collection, "name", str(collection))
-                doc_key = name[4:] if name.startswith("doc_") else name
-                if doc_key not in self._documents:
-                    try:
-                        client.delete_collection(name)
-                        logger.info(f"清理孤儿集合: {name}")
-                    except Exception:
-                        logger.warning(f"孤儿集合 {name} 清理失败")
+                # 保留正常命名（与 doc_id 同名）及旧命名（doc_<doc_id>）的集合
+                legacy_key = name[4:] if name.startswith("doc_") else name
+                if name in self._documents or legacy_key in self._documents:
+                    continue
+                try:
+                    client.delete_collection(name)
+                    logger.info(f"清理孤儿集合: {name}")
+                except Exception:
+                    logger.warning(f"孤儿集合 {name} 清理失败")
         except Exception as e:
             logger.warning(f"孤儿集合清理跳过: {e}")
 
@@ -108,7 +83,7 @@ class KnowledgeBaseService:
                 created_at=now,
                 updated_at=now,
             )
-            self._save_registry()
+            self._repository.save(self._documents)
         return doc_id
 
     def update_document_status(
@@ -127,7 +102,7 @@ class KnowledgeBaseService:
             doc.total_chunks = total_chunks
             doc.error = error
             doc.updated_at = datetime.now(UTC)
-            self._save_registry()
+            self._repository.save(self._documents)
 
     def update_document_file_size(self, doc_id: str, file_size: int) -> None:
         """上传完成后回填实际文件字节数。"""
@@ -137,7 +112,7 @@ class KnowledgeBaseService:
                 return
             doc.file_size = file_size
             doc.updated_at = datetime.now(UTC)
-            self._save_registry()
+            self._repository.save(self._documents)
 
     def get_document_info(self, doc_id: str) -> DocumentInfo | None:
         return self._documents.get(doc_id)
@@ -185,9 +160,7 @@ class KnowledgeBaseService:
         )
         return result
 
-    def search(
-        self, doc_id: str, query: str, top_k: int = 5
-    ) -> list[dict]:
+    def search(self, doc_id: str, query: str, top_k: int = 5) -> list[dict]:
         """在文档中检索。"""
         engine = self.get_engine(doc_id)
         if not engine:
@@ -201,4 +174,4 @@ class KnowledgeBaseService:
             if engine is not None:
                 engine.indexer.drop()
             self._documents.pop(doc_id, None)
-            self._save_registry()
+            self._repository.save(self._documents)

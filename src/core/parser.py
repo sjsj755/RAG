@@ -4,18 +4,19 @@ from typing import Any
 
 from paddleocr import PaddleOCRClient
 
-from src.core.config import settings
+from src.core.config import Settings, get_settings
 from src.utils.helpers import to_dict
 from src.utils.logger import logger
 
 
 class PDFParser:
-    def __init__(self) -> None:
+    def __init__(self, config: Settings | None = None) -> None:
+        cfg = config or get_settings()
         self.client = PaddleOCRClient(
-            token=settings.paddleocr_api_key,
-            base_url=settings.paddleocr_base_url,
+            token=cfg.paddleocr_api_key,
+            base_url=cfg.paddleocr_base_url,
         )
-        self.model = settings.paddleocr_model
+        self.model = cfg.paddleocr_model
 
     def parse(self, pdf_path: str) -> list[dict[str, Any]]:
         """解析 PDF，返回页面列表（每页包含 text/type/block_id/page_num 块）。"""
@@ -44,7 +45,6 @@ class PDFParser:
                 for block in parsing_list:
                     label = block.get("block_label", "")
                     content = block.get("block_content", "").strip()
-                    # 过滤页眉页脚等无关内容
                     # 忽略页眉页脚、孤立数字、脚注等无关内容
                     # （与 PaddleOCR 官方 markdown 的 markdown_ignore_labels 保持一致）
                     if content and label not in {

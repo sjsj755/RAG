@@ -1,13 +1,9 @@
-"""全局日志配置（loguru）。"""
+"""日志配置（loguru）：由应用启动时显式装配，不再依赖全局配置。"""
 
 import sys
 from pathlib import Path
 
 from loguru import logger
-
-from src.core.config import settings
-
-logger.remove()
 
 CONSOLE_FORMAT = (
     "<green>{time:YYYY-MM-DD HH:mm:ss}</green> | "
@@ -20,18 +16,30 @@ FILE_FORMAT = (
     "{name}:{function}:{line} - {message}"
 )
 
-logger.add(sys.stderr, level=settings.log_level, format=CONSOLE_FORMAT)
 
-log_dir = Path(settings.log_dir)
-log_dir.mkdir(parents=True, exist_ok=True)
-logger.add(
-    log_dir / "{time:YYYY-MM-DD}.log",
-    rotation="10 MB",
-    retention="7 days",
-    encoding="utf-8",
-    enqueue=True,
-    level=settings.log_level,
-    format=FILE_FORMAT,
-)
+def configure_logger(
+    level: str = "INFO",
+    log_dir: str | Path | None = None,
+) -> None:
+    """（重）配置全局 logger：控制台必开，文件输出可选。"""
+    logger.remove()
+    logger.add(sys.stderr, level=level, format=CONSOLE_FORMAT)
 
-__all__ = ["logger"]
+    if log_dir:
+        log_dir = Path(log_dir)
+        log_dir.mkdir(parents=True, exist_ok=True)
+        logger.add(
+            log_dir / "{time:YYYY-MM-DD}.log",
+            rotation="10 MB",
+            retention="7 days",
+            encoding="utf-8",
+            enqueue=True,
+            level=level,
+            format=FILE_FORMAT,
+        )
+
+
+# 默认仅控制台输出，避免任何模块在应用显式装配前导入即崩溃
+configure_logger()
+
+__all__ = ["logger", "configure_logger"]

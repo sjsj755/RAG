@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>多模态 RAG 控制台</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header>
+    <h1>多模态 RAG 控制台</h1>
+    <span id="health" class="badge badge-pending">检测中…</span>
+  </header>
+
+  <main>
+    <section class="card">
+      <h2>上传 PDF</h2>
+      <form id="upload-form" class="row">
+        <input type="file" id="file-input" accept=".pdf" required>
+        <button type="submit" id="upload-btn">上传</button>
+      </form>
+      <p id="upload-msg" class="msg"></p>
+    </section>
+
+    <section class="card">
+      <h2>文档列表</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>文件名</th>
+            <th>大小</th>
+            <th>状态</th>
+            <th>块数</th>
+            <th>创建时间</th>
+            <th>操作</th>
+          </tr>
+        </thead>
+        <tbody id="doc-tbody"></tbody>
+      </table>
+      <p id="doc-msg" class="msg"></p>
+    </section>
+
+    <section class="card">
+      <h2>语义检索</h2>
+      <div class="row">
+        <select id="search-doc" aria-label="选择文档"></select>
+        <input type="text" id="search-query" placeholder="输入问题，例如：什么是函数？" required>
+        <input type="number" id="search-topk" value="5" min="1" max="20" title="返回条数">
+        <button type="button" id="search-btn">检索</button>
+      </div>
+      <p id="search-msg" class="msg"></p>
+      <div id="results"></div>
+    </section>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

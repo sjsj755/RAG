@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# 环境变量与密钥
+.env
+.env.local
+
+# 运行时数据
+uploads/
+chroma_db/
+logs/
+registry.json
+test_uploads/
+test_chroma/
+test_logs/
+test_registry.json
+src/data/logs/
+src/data/a/
+src/data/**/*.pdf
+src/data/*.pdf
+
+# IDE
+.idea/
+.vscode/

@@ -1,4 +1,4 @@
-# 多模态 RAG 服务
+# 数学 RAG 服务
 
 基于 **PaddleOCR-VL + Qwen Embedding + ChromaDB** 的 PDF 智能问答系统：
 上传 PDF → PaddleOCR-VL 解析为结构化内容块 → Qwen 生成向量 → ChromaDB

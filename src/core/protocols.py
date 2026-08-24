@@ -33,3 +33,29 @@ class VectorIndexerProtocol(Protocol):
     ) -> list[dict[str, Any]]: ...
 
     def count(self) -> int: ...
+
+
+class ChunkerProtocol(Protocol):
+    """语义分块器接口：将解析后的页面块聚合/切分为检索单元。"""
+
+    def chunk(self, pages: list[dict[str, Any]]) -> list[dict[str, Any]]: ...
+
+
+class QueryRewriterProtocol(Protocol):
+    """查询改写器接口：返回通过相似度过滤的改写查询（可为空）。"""
+
+    def rewrite(self, query: str) -> list[str]: ...
+
+
+class KnowledgeGraphProtocol(Protocol):
+    """轻量知识图谱接口：构建与检索候选。"""
+
+    def build(self, chunks: list[dict[str, Any]]) -> None: ...
+
+    def query_candidates(
+        self, query: str, top_k: int = 5
+    ) -> list[dict[str, Any]]: ...
+
+    def save(self, path: str | Any) -> None: ...
+
+    def load(self, path: str | Any) -> None: ...

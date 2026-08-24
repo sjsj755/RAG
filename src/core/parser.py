@@ -1,5 +1,6 @@
 """PDF 文档解析器：基于 PaddleOCR-VL API 提取结构化内容块。"""
 
+from uuid import uuid4
 from typing import Any
 
 from paddleocr import PaddleOCRClient
@@ -25,6 +26,7 @@ class PDFParser:
             result = self.client.parse_document(
                 file_path=pdf_path,
                 model=self.model,
+                batch_id=uuid4().hex,
             )
             result_dict = to_dict(result)
         except Exception as e:

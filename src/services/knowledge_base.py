@@ -172,6 +172,6 @@ class KnowledgeBaseService:
         with self._lock:
             engine = self._engines.pop(doc_id, None)
             if engine is not None:
-                engine.indexer.drop()
+                engine.drop_index()
             self._documents.pop(doc_id, None)
             self._repository.save(self._documents)

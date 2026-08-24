@@ -78,6 +78,28 @@ class Settings(BaseSettings):
         ),
     )
 
+    # ---------- DeepSeek（查询改写/补全） ----------
+    deepseek_api_key: str = Field(
+        default="",
+        validation_alias=AliasChoices("DEEPSEEK_API_KEY", "DEEPSEEK_KEY"),
+    )
+    deepseek_base_url: str = "https://api.deepseek.com/v1"
+    deepseek_model: str = "deepseek-chat"
+
+    # ---------- 分块 ----------
+    chunk_max_tokens: int = Field(default=512, ge=64, le=4096)
+    # 超长块滑动窗口的重叠比例（0 ~ 0.5）
+    chunk_overlap_ratio: float = Field(default=0.15, ge=0.0, lt=0.5)
+
+    # ---------- 查询改写 ----------
+    query_rewrite_enabled: bool = True
+    query_rewrite_count: int = Field(default=2, ge=1, le=4)
+    # 改写查询与原始查询的相似度阈值，低于阈值丢弃
+    query_similarity_threshold: float = Field(default=0.75, ge=0.0, le=1.0)
+
+    # ---------- 知识图谱 ----------
+    kg_enabled: bool = True
+
     # ---------- RAG 内部参数 ----------
     embedding_batch_size: int = Field(default=10, ge=1, le=64)
     default_top_k: int = Field(default=5, ge=1, le=20)

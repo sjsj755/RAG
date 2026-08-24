@@ -28,6 +28,9 @@ class FakeEngine:
     def drop(self) -> None:
         self.dropped = True
 
+    def drop_index(self) -> None:
+        self.dropped = True
+
 
 class BoomEngine(FakeEngine):
     def build_index(self, pdf_path: str) -> dict:

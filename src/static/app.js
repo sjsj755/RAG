@@ -182,7 +182,7 @@ document.getElementById("search-btn").addEventListener("click", async () => {
         (item) => `
           <div class="result-item">
             <div class="result-meta">
-              <span>相关度 ${(item.score * 100).toFixed(1)}%</span>
+              <span>相关度 ${item.score == null ? "-" : `${(item.score * 100).toFixed(1)}%`}</span>
               <span>页码 ${item.page_num ?? "-"}</span>
               <span>类型 ${escapeHtml(item.type ?? "-")}</span>
             </div>

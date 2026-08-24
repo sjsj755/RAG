@@ -173,5 +173,24 @@ class KnowledgeBaseService:
             engine = self._engines.pop(doc_id, None)
             if engine is not None:
                 engine.drop_index()
+            else:
+                # 引擎不在内存缓存（如服务重启后）时，直接删除集合与图谱文件
+                self._drop_collection(doc_id)
             self._documents.pop(doc_id, None)
             self._repository.save(self._documents)
+
+    def _drop_collection(self, doc_id: str) -> None:
+        """直接删除文档对应的 Chroma 集合与知识图谱文件。"""
+        try:
+            client = chromadb.PersistentClient(
+                path=self._config.chroma_persist_dir,
+                settings=chromadb.config.Settings(anonymized_telemetry=False),
+            )
+            client.delete_collection(doc_id)
+            logger.info(f"集合 {doc_id} 已删除")
+        except Exception:
+            logger.warning(f"集合 {doc_id} 删除失败或不存在")
+        kg_path = (
+            Path(self._config.chroma_persist_dir) / f"{doc_id}.kg.json"
+        )
+        kg_path.unlink(missing_ok=True)

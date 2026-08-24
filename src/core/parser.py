@@ -1,13 +1,31 @@
 """PDF 文档解析器：基于 PaddleOCR-VL API 提取结构化内容块。"""
 
-from uuid import uuid4
+import re
 from typing import Any
+from uuid import uuid4
 
 from paddleocr import PaddleOCRClient
 
 from src.core.config import Settings, get_settings
 from src.utils.helpers import to_dict
 from src.utils.logger import logger
+
+# 广告推广与版权出版噪声内容特征（命中即过滤，对任意教材通用）
+_NOISE_PATTERNS = (
+    re.compile(
+        r"公众号|微信号|扫码关注|学习方法指导|全套.{0,8}(PDF|电子课本)|"
+        r"分享给大家|回复.{0,8}电子课本"
+    ),
+    re.compile(
+        r"ISBN|书号|定价|版权所有|未经许可|审图号|意见反馈平台|责任编辑|"
+        r"美术编辑|主编|副主编|编写人员|重印|开本|印张|印刷"
+    ),
+)
+
+
+def _is_noise_content(content: str) -> bool:
+    """判断内容是否为广告推广或版权出版噪声。"""
+    return any(pattern.search(content) for pattern in _NOISE_PATTERNS)
 
 
 class PDFParser:
@@ -57,7 +75,7 @@ class PDFParser:
                         "number",
                         "footnote",
                         "aside_text",
-                    }:
+                    } and not _is_noise_content(content):
                         blocks.append(
                             {
                                 "text": content,
@@ -69,7 +87,7 @@ class PDFParser:
             else:
                 # 降级方案：使用完整 markdown
                 markdown = page.get("markdown_text", "").strip()
-                if markdown:
+                if markdown and not _is_noise_content(markdown):
                     blocks.append(
                         {
                             "text": markdown,

@@ -139,3 +139,33 @@ def test_cleanup_keeps_known_collections(tmp_path):
     assert doc_id in names
     assert f"doc_{doc_id}" in names
     assert "doc_orphan" not in names
+
+
+def test_delete_removes_collection_even_without_cached_engine(tmp_path):
+    config = Settings(
+        _env_file=None,
+        qwen_api_key="k",
+        qwen_base_url="https://example.com/v1",
+        paddleocr_api_key="p",
+        chroma_persist_dir=str(tmp_path / "chroma"),
+        registry_file=str(tmp_path / "registry.json"),
+        upload_dir=str(tmp_path / "uploads"),
+    )
+    service = KnowledgeBaseService(
+        config=config,
+        reconcile=False,
+        engine_factory=lambda doc_id: FakeEngine(doc_id),
+    )
+    doc_id = service.create_document("a.pdf", 1)
+
+    # 不经过 get_engine，直接创建同名集合，模拟服务重启后的残留
+    client = chromadb.PersistentClient(
+        path=config.chroma_persist_dir,
+        settings=chromadb.config.Settings(anonymized_telemetry=False),
+    )
+    client.create_collection(name=doc_id)
+
+    service.delete_document(doc_id)
+
+    names = [collection.name for collection in client.list_collections()]
+    assert doc_id not in names

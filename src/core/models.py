@@ -38,6 +38,27 @@ class SearchResponse(BaseModel):
     refused: bool = False
 
 
+class CitationSource(BaseModel):
+    index: int
+    page_num: int = 0
+    text: str
+    score: float | None = None
+
+
+class AnswerRequest(BaseModel):
+    query: str = Field(min_length=1, max_length=2000)
+    top_k: int = Field(default=5, ge=1, le=20)
+
+
+class AnswerResponse(BaseModel):
+    query: str
+    answer: str | None = None
+    refused: bool = False
+    refusal_reason: str | None = None
+    confidence: float | None = None
+    sources: list[CitationSource] = []
+
+
 class DocumentInfo(BaseModel):
     id: str
     filename: str

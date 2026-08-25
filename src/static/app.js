@@ -211,6 +211,7 @@ document.getElementById("search-btn").addEventListener("click", async () => {
   const query = document.getElementById("search-query").value.trim();
   const topK = Number(document.getElementById("search-topk").value || 5);
   const resultsBox = document.getElementById("results");
+  const answerBox = document.getElementById("answer-area");
 
   if (!docId) {
     setMsg("search-msg", "请先选择文档", "error");
@@ -222,6 +223,7 @@ document.getElementById("search-btn").addEventListener("click", async () => {
   }
 
   document.getElementById("search-btn").disabled = true;
+  answerBox.innerHTML = "";
   setMsg("search-msg", "检索中…");
   try {
     const data = await request(`/api/v1/search/${docId}`, {
@@ -254,6 +256,125 @@ document.getElementById("search-btn").addEventListener("click", async () => {
     setMsg("search-msg", `检索失败：${err.message}`, "error");
   } finally {
     document.getElementById("search-btn").disabled = false;
+  }
+});
+
+document.getElementById("answer-btn").addEventListener("click", async () => {
+  const docId = document.getElementById("search-doc").value;
+  const query = document.getElementById("search-query").value.trim();
+  const topK = Number(document.getElementById("search-topk").value || 5);
+  const answerBox = document.getElementById("answer-area");
+  const resultsBox = document.getElementById("results");
+  const btn = document.getElementById("answer-btn");
+
+  if (!docId) {
+    setMsg("search-msg", "请先选择文档", "error");
+    return;
+  }
+  if (!query) {
+    setMsg("search-msg", "请输入问题", "error");
+    return;
+  }
+
+  btn.disabled = true;
+  resultsBox.innerHTML = "";
+  answerBox.innerHTML = "";
+  setMsg("search-msg", "生成答案中…");
+
+  let answerHtml = "";
+  let sources = [];
+  let refused = false;
+  let refusalReason = "";
+  let confidenceText = "-";
+
+  const render = () => {
+    answerBox.innerHTML = `
+      <div class="answer-box">
+        ${
+          refused
+            ? `<p class="msg warn">${escapeHtml(refusalReason)}（置信度 ${confidenceText}）</p>`
+            : ""
+        }
+        ${answerHtml ? `<div class="answer-text">${answerHtml}</div>` : ""}
+        ${
+          sources.length
+            ? `<div class="answer-sources">引用：${sources
+                .map(
+                  (s) =>
+                    `<span class="source-chip" title="${escapeHtml(
+                      (s.text || "").slice(0, 120)
+                    )}">第 ${s.page_num ?? "-"} 页 [${s.index}]</span>`
+                )
+                .join("")}</div>`
+            : ""
+        }
+      </div>`;
+  };
+
+  try {
+    const resp = await fetch(`/api/v1/answer/${docId}?stream=true`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ query, top_k: topK }),
+    });
+    if (!resp.ok) {
+      const data = await resp.json().catch(() => ({}));
+      throw new Error(data.detail || `HTTP ${resp.status}`);
+    }
+
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder("utf-8");
+    let buffer = "";
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let sep;
+      while ((sep = buffer.indexOf("\n\n")) >= 0) {
+        const block = buffer.slice(0, sep);
+        buffer = buffer.slice(sep + 2);
+        for (const line of block.split("\n")) {
+          if (!line.startsWith("data: ")) continue;
+          let event;
+          try {
+            event = JSON.parse(line.slice(6));
+          } catch (_) {
+            continue;
+          }
+          if (event.type === "sources") {
+            sources = event.sources || [];
+            confidenceText =
+              event.confidence == null
+                ? "-"
+                : `${(event.confidence * 100).toFixed(1)}%`;
+            render();
+          } else if (event.type === "answer") {
+            answerHtml += escapeHtml(event.content || "");
+            render();
+          } else if (event.type === "refused") {
+            refused = true;
+            refusalReason = event.reason || "";
+            confidenceText =
+              event.confidence == null
+                ? "-"
+                : `${(event.confidence * 100).toFixed(1)}%`;
+            render();
+          } else if (event.type === "error") {
+            throw new Error(event.detail || "答案生成失败");
+          }
+        }
+      }
+    }
+    setMsg(
+      "search-msg",
+      refused ? "已拒绝生成（检索置信度不足）" : "答案生成完成",
+      refused ? "warn" : "ok"
+    );
+  } catch (err) {
+    setMsg("search-msg", `答案生成失败：${err.message}`, "error");
+    answerBox.innerHTML = `<div class="answer-box"><p class="msg error">${escapeHtml(err.message)}</p></div>`;
+  } finally {
+    btn.disabled = false;
   }
 });
 

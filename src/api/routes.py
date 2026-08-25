@@ -1,18 +1,24 @@
 """RAG API 路由。"""
 
+import json
+
 from fastapi import (
     APIRouter,
     BackgroundTasks,
     Depends,
     File,
     HTTPException,
+    Query,
     UploadFile,
     status,
 )
+from fastapi.responses import StreamingResponse
 
 from src.api.dependencies import get_app_settings, get_file_storage, get_knowledge_base
 from src.core.config import Settings
 from src.core.models import (
+    AnswerRequest,
+    AnswerResponse,
     BatchUploadItem,
     BatchUploadResponse,
     ChunkResponse,
@@ -31,6 +37,21 @@ from src.utils.logger import logger
 router = APIRouter(prefix="/api/v1", tags=["RAG"])
 
 _PDF_MAGIC = b"%PDF-"
+
+
+def _require_completed_doc(
+    kb: KnowledgeBaseService, doc_id: str
+) -> DocumentInfo:
+    """校验文档存在且已完成索引，返回文档信息。"""
+    doc_info = kb.get_document_info(doc_id)
+    if not doc_info:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"文档不存在: {doc_id}")
+    if doc_info.status != DocumentStatus.COMPLETED:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"文档尚未完成索引，当前状态: {doc_info.status.value}",
+        )
+    return doc_info
 
 
 async def _validate_pdf(file: UploadFile, max_upload_size_mb: int) -> int:
@@ -248,6 +269,56 @@ async def search_document(
         confidence=outcome["confidence"],
         refused=outcome["refused"],
     )
+
+
+def _answer_event_source(
+    kb: KnowledgeBaseService, doc_id: str, query: str, top_k: int
+):
+    """把流式答案事件序列编码为 SSE data 行。"""
+    try:
+        for event in kb.stream_answer(doc_id, query, top_k):
+            yield (
+                "data: "
+                f"{json.dumps(event, ensure_ascii=False, separators=(',', ':'))}\n\n"
+            )
+    except Exception as e:
+        logger.exception(f"流式答案生成失败: {e}")
+        payload = json.dumps(
+            {"type": "error", "detail": "答案生成失败，请稍后重试"},
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        yield f"data: {payload}\n\n"
+
+
+@router.post("/answer/{doc_id}", response_model=AnswerResponse)
+def answer_document(
+    doc_id: str,
+    request: AnswerRequest,
+    kb: KnowledgeBaseService = Depends(get_knowledge_base),
+    stream: bool = Query(default=False),
+):
+    """检索并生成答案；stream=true 时以 SSE 流式返回。"""
+    _require_completed_doc(kb, doc_id)
+
+    if stream:
+        return StreamingResponse(
+            _answer_event_source(kb, doc_id, request.query, request.top_k),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
+    try:
+        result = kb.answer(doc_id, request.query, request.top_k)
+    except Exception as e:
+        logger.exception(f"答案生成失败: {e}")
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY, "答案生成失败，请稍后重试"
+        )
+    return AnswerResponse(**result)
 
 
 @router.get("/documents", response_model=list[DocumentInfo])

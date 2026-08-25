@@ -204,6 +204,36 @@ th {
   cursor: pointer;
 }
 
+.answer-box {
+  margin-top: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.answer-text {
+  font-size: 15px;
+  line-height: 1.8;
+  white-space: pre-wrap;
+}
+
+.answer-sources {
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.source-chip {
+  display: inline-block;
+  margin: 2px 6px 2px 0;
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: #eef2ff;
+  color: var(--primary);
+  cursor: default;
+}
+
 .result-item {
   padding: 12px;
   border: 1px solid var(--border);

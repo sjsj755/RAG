@@ -16,6 +16,8 @@ class FakeKnowledgeBase:
     def __init__(self) -> None:
         self.docs: dict[str, DocumentInfo] = {}
         self._seq = 0
+        self.refused = False
+        self.answer_error = False
 
     def create_document(self, filename: str, file_size: int) -> str:
         self._seq += 1
@@ -79,6 +81,51 @@ class FakeKnowledgeBase:
             "confidence": 0.9,
             "refused": False,
         }
+
+    def answer(self, doc_id: str, query: str, top_k: int = 5) -> dict:
+        if self.answer_error:
+            raise RuntimeError("boom")
+        if self.refused:
+            return {
+                "query": query,
+                "answer": None,
+                "refused": True,
+                "refusal_reason": "检索置信度不足，未生成答案",
+                "confidence": 0.3,
+                "sources": [],
+            }
+        return {
+            "query": query,
+            "answer": "集合是某些对象的总体，定义答案",
+            "refused": False,
+            "refusal_reason": None,
+            "confidence": 0.9,
+            "sources": [
+                {"index": 1, "page_num": 3, "text": "片段", "score": 0.9}
+            ],
+        }
+
+    def stream_answer(self, doc_id: str, query: str, top_k: int = 5):
+        if self.answer_error:
+            raise RuntimeError("boom")
+        if self.refused:
+            yield {
+                "type": "refused",
+                "reason": "检索置信度不足，未生成答案",
+                "confidence": 0.3,
+            }
+            yield {"type": "done", "refused": True, "confidence": 0.3}
+            return
+        yield {
+            "type": "sources",
+            "sources": [
+                {"index": 1, "page_num": 3, "text": "片段", "score": 0.9}
+            ],
+            "confidence": 0.9,
+        }
+        yield {"type": "answer", "content": "定义"}
+        yield {"type": "answer", "content": "答案"}
+        yield {"type": "done", "refused": False, "confidence": 0.9}
 
     def delete_document(self, doc_id: str) -> None:
         self.docs.pop(doc_id, None)
@@ -294,3 +341,115 @@ def test_stats(client):
     response = test_client.get(f"/api/v1/stats/{doc_id}")
     assert response.status_code == 200
     assert response.json()["total_vectors"] == 7
+
+
+def test_answer_success(client):
+    test_client, fake = client
+    doc_id = fake.create_document("math.pdf", 10)
+    fake.docs[doc_id].status = DocumentStatus.COMPLETED
+
+    response = test_client.post(
+        f"/api/v1/answer/{doc_id}",
+        json={"query": "什么是集合？", "top_k": 3},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["answer"] == "集合是某些对象的总体，定义答案"
+    assert body["refused"] is False
+    assert body["confidence"] == 0.9
+    assert body["sources"][0]["index"] == 1
+    assert body["sources"][0]["page_num"] == 3
+
+
+def test_answer_refused(client):
+    test_client, fake = client
+    doc_id = fake.create_document("math.pdf", 10)
+    fake.docs[doc_id].status = DocumentStatus.COMPLETED
+    fake.refused = True
+
+    response = test_client.post(
+        f"/api/v1/answer/{doc_id}", json={"query": "量子纠缠是什么？"}
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["refused"] is True
+    assert body["answer"] is None
+    assert body["sources"] == []
+    assert "检索置信度不足" in body["refusal_reason"]
+
+
+def test_answer_stream(client):
+    test_client, fake = client
+    doc_id = fake.create_document("math.pdf", 10)
+    fake.docs[doc_id].status = DocumentStatus.COMPLETED
+
+    response = test_client.post(
+        f"/api/v1/answer/{doc_id}?stream=true",
+        json={"query": "什么是集合？"},
+    )
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    body = response.text
+    assert '"type":"sources"' in body
+    assert '"type":"answer"' in body
+    assert '"type":"done"' in body
+
+
+def test_answer_stream_refused(client):
+    test_client, fake = client
+    doc_id = fake.create_document("math.pdf", 10)
+    fake.docs[doc_id].status = DocumentStatus.COMPLETED
+    fake.refused = True
+
+    response = test_client.post(
+        f"/api/v1/answer/{doc_id}?stream=true",
+        json={"query": "量子纠缠是什么？"},
+    )
+    assert response.status_code == 200
+    body = response.text
+    assert '"type":"refused"' in body
+    assert '"type":"done"' in body
+    assert '"type":"answer"' not in body
+
+
+def test_answer_unknown_doc_404(client):
+    test_client, _ = client
+    response = test_client.post(
+        "/api/v1/answer/not_exists", json={"query": "什么是集合？"}
+    )
+    assert response.status_code == 404
+
+
+def test_answer_not_indexed_400(client):
+    test_client, fake = client
+    doc_id = fake.create_document("math.pdf", 10)
+    response = test_client.post(
+        f"/api/v1/answer/{doc_id}", json={"query": "什么是集合？"}
+    )
+    assert response.status_code == 400
+
+
+def test_answer_generation_failure_502(client):
+    test_client, fake = client
+    doc_id = fake.create_document("math.pdf", 10)
+    fake.docs[doc_id].status = DocumentStatus.COMPLETED
+    fake.answer_error = True
+
+    response = test_client.post(
+        f"/api/v1/answer/{doc_id}", json={"query": "什么是集合？"}
+    )
+    assert response.status_code == 502
+
+
+def test_answer_stream_error_event(client):
+    test_client, fake = client
+    doc_id = fake.create_document("math.pdf", 10)
+    fake.docs[doc_id].status = DocumentStatus.COMPLETED
+    fake.answer_error = True
+
+    response = test_client.post(
+        f"/api/v1/answer/{doc_id}?stream=true",
+        json={"query": "什么是集合？"},
+    )
+    assert response.status_code == 200
+    assert '"type":"error"' in response.text

@@ -1,12 +1,13 @@
 """知识库服务：管理多文档的注册表（持久化）与索引生命周期。"""
 
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 
 import chromadb
 
+from src.core.answer_generator import LLMAnswerGenerator
 from src.core.config import Settings, get_settings
 from src.core.models import DocumentInfo, DocumentStatus
 from src.core.rag_engine import RAGEngine
@@ -28,9 +29,13 @@ class KnowledgeBaseService:
         config: Settings | None = None,
         registry_path: str | Path | None = None,
         engine_factory: Callable[[str], RAGEngine] | None = None,
+        answer_generator: LLMAnswerGenerator | None = None,
         reconcile: bool = True,
     ) -> None:
         self._config = config or get_settings()
+        self._answer_generator = answer_generator or LLMAnswerGenerator(
+            config=self._config
+        )
         self._repository = DocumentRepository(
             registry_path or self._config.registry_file
         )
@@ -175,6 +180,69 @@ class KnowledgeBaseService:
         if not engine:
             raise ValueError(f"文档不存在: {doc_id}")
         return engine.search_with_confidence(query, top_k)
+
+    def answer(self, doc_id: str, query: str, top_k: int = 5) -> dict:
+        """检索 + LLM 生成答案；低置信度时短路拒绝，不调用 LLM。"""
+        outcome = self.search_with_confidence(doc_id, query, top_k)
+        if outcome["refused"]:
+            return {
+                "query": query,
+                "answer": None,
+                "refused": True,
+                "refusal_reason": "检索置信度不足，未生成答案",
+                "confidence": outcome["confidence"],
+                "sources": [],
+            }
+        sources = self._build_sources(outcome["results"])
+        answer = self._answer_generator.generate(query, sources)
+        return {
+            "query": query,
+            "answer": answer,
+            "refused": False,
+            "refusal_reason": None,
+            "confidence": outcome["confidence"],
+            "sources": sources,
+        }
+
+    def stream_answer(
+        self, doc_id: str, query: str, top_k: int = 5
+    ) -> Iterator[dict]:
+        """流式答案事件序列：sources → answer×n → done；低置信为 refused + done。"""
+        outcome = self.search_with_confidence(doc_id, query, top_k)
+        if outcome["refused"]:
+            yield {
+                "type": "refused",
+                "reason": "检索置信度不足，未生成答案",
+                "confidence": outcome["confidence"],
+            }
+            yield {"type": "done", "refused": True, "confidence": outcome["confidence"]}
+            return
+
+        sources = self._build_sources(outcome["results"])
+        yield {
+            "type": "sources",
+            "sources": sources,
+            "confidence": outcome["confidence"],
+        }
+        for piece in self._answer_generator.stream(query, sources):
+            yield {"type": "answer", "content": piece}
+        yield {"type": "done", "refused": False, "confidence": outcome["confidence"]}
+
+    @staticmethod
+    def _build_sources(results: list[dict]) -> list[dict]:
+        """把检索结果组装为引用来源（fragment 优先，回退父块文本）。"""
+        sources = []
+        for i, result in enumerate(results, start=1):
+            text = result.get("fragment") or result.get("text") or ""
+            sources.append(
+                {
+                    "index": i,
+                    "page_num": result.get("page_num", 0),
+                    "text": text,
+                    "score": result.get("score"),
+                }
+            )
+        return sources
 
     def delete_document(self, doc_id: str) -> None:
         """删除文档：移除索引集合、引擎实例与注册表记录。"""

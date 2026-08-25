@@ -114,6 +114,9 @@ class Settings(BaseSettings):
     # LLM 二阶段重排（仅概念/定义类查询）
     llm_rerank_enabled: bool = True
     llm_rerank_top_n: int = Field(default=20, ge=5, le=50)
+    # LLM 答案生成
+    answer_temperature: float = Field(default=0.3, ge=0.0, le=1.5)
+    answer_max_tokens: int = Field(default=1024, ge=64, le=8192)
 
     # ---------- 子块 ----------
     subchunk_enabled: bool = True

@@ -37,6 +37,46 @@ class BoomEngine(FakeEngine):
         raise RuntimeError("boom")
 
 
+class FakeAnswerGenerator:
+    def __init__(
+        self,
+        answer: str = "生成答案",
+        pieces: list[str] | None = None,
+        raise_error: bool = False,
+    ) -> None:
+        self.answer = answer
+        self.pieces = pieces or ["片", "段"]
+        self.raise_error = raise_error
+        self.generate_calls = 0
+        self.stream_calls = 0
+
+    def generate(self, query: str, sources: list[dict]) -> str:
+        self.generate_calls += 1
+        if self.raise_error:
+            raise RuntimeError("boom")
+        return self.answer
+
+    def stream(self, query: str, sources: list[dict]):
+        self.stream_calls += 1
+        if self.raise_error:
+            raise RuntimeError("boom")
+        yield from self.pieces
+
+
+class StubKB(KnowledgeBaseService):
+    """固定 search_with_confidence 结果的知识库替身。"""
+
+    def __init__(self, outcome: dict, generator, **kwargs) -> None:
+        super().__init__(reconcile=False, **kwargs)
+        self._outcome = outcome
+        self._answer_generator = generator
+
+    def search_with_confidence(
+        self, doc_id: str, query: str, top_k: int = 5
+    ) -> dict:
+        return self._outcome
+
+
 def make_service(
     registry_path, engine_factory=None, reconcile=False
 ) -> KnowledgeBaseService:
@@ -169,3 +209,87 @@ def test_delete_removes_collection_even_without_cached_engine(tmp_path):
 
     names = [collection.name for collection in client.list_collections()]
     assert doc_id not in names
+
+
+def test_answer_refused_short_circuits(tmp_path):
+    generator = FakeAnswerGenerator()
+    kb = StubKB(
+        registry_path=tmp_path / "registry.json",
+        outcome={"refused": True, "confidence": 0.3, "results": []},
+        generator=generator,
+    )
+
+    result = kb.answer("doc", "量子纠缠是什么？")
+
+    assert result["refused"] is True
+    assert result["answer"] is None
+    assert result["sources"] == []
+    assert "检索置信度不足" in result["refusal_reason"]
+    assert generator.generate_calls == 0
+
+
+def test_answer_builds_sources_and_generates(tmp_path):
+    generator = FakeAnswerGenerator(answer="集合定义")
+    kb = StubKB(
+        registry_path=tmp_path / "registry.json",
+        outcome={
+            "refused": False,
+            "confidence": 0.9,
+            "results": [
+                {"page_num": 9, "text": "父块全文", "fragment": "命中片段", "score": 0.8},
+                {"page_num": 10, "text": "第二个块", "score": 0.7},
+            ],
+        },
+        generator=generator,
+    )
+
+    result = kb.answer("doc", "什么是集合？")
+
+    assert result["answer"] == "集合定义"
+    assert result["refused"] is False
+    assert result["sources"] == [
+        {"index": 1, "page_num": 9, "text": "命中片段", "score": 0.8},
+        {"index": 2, "page_num": 10, "text": "第二个块", "score": 0.7},
+    ]
+    assert generator.generate_calls == 1
+
+
+def test_stream_answer_events_success(tmp_path):
+    generator = FakeAnswerGenerator(pieces=["定", "义"])
+    kb = StubKB(
+        registry_path=tmp_path / "registry.json",
+        outcome={
+            "refused": False,
+            "confidence": 0.9,
+            "results": [{"page_num": 9, "text": "块", "score": 0.8}],
+        },
+        generator=generator,
+    )
+
+    events = list(kb.stream_answer("doc", "什么是集合？"))
+
+    assert [event["type"] for event in events] == [
+        "sources",
+        "answer",
+        "answer",
+        "done",
+    ]
+    assert events[0]["sources"][0]["index"] == 1
+    assert events[1]["content"] == "定"
+    assert events[-1]["refused"] is False
+    assert generator.stream_calls == 1
+
+
+def test_stream_answer_events_refused(tmp_path):
+    generator = FakeAnswerGenerator()
+    kb = StubKB(
+        registry_path=tmp_path / "registry.json",
+        outcome={"refused": True, "confidence": 0.3, "results": []},
+        generator=generator,
+    )
+
+    events = list(kb.stream_answer("doc", "量子纠缠是什么？"))
+
+    assert [event["type"] for event in events] == ["refused", "done"]
+    assert events[0]["reason"] == "检索置信度不足，未生成答案"
+    assert generator.stream_calls == 0

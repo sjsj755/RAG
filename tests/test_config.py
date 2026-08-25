@@ -82,5 +82,7 @@ def test_retrieval_and_confidence_defaults(monkeypatch):
     assert settings.answer_confidence_threshold == 0.55
     assert settings.llm_rerank_enabled is True
     assert settings.llm_rerank_top_n == 20
+    assert settings.answer_temperature == 0.3
+    assert settings.answer_max_tokens == 1024
     assert settings.subchunk_enabled is True
     assert settings.subchunk_max_tokens == 160

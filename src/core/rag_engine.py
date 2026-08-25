@@ -20,10 +20,11 @@ from src.core.protocols import (
     VectorIndexerProtocol,
 )
 from src.core.query_rewriter import DeepSeekQueryRewriter
+from src.core.reranker import LLMReranker
 from src.utils.helpers import compute_confidence
 from src.utils.logger import logger
 from src.utils.math_normalize import normalize_math_text
-from src.utils.query_routing import is_chapter_query
+from src.utils.query_routing import is_chapter_query, is_concept_query
 
 
 class RAGEngine:
@@ -40,6 +41,7 @@ class RAGEngine:
         query_rewriter: QueryRewriterProtocol | None = None,
         knowledge_graph: KnowledgeGraphProtocol | None = None,
         bm25: BM25Retriever | None = None,
+        reranker: LLMReranker | None = None,
         config: Settings | None = None,
     ) -> None:
         cfg = config or get_settings()
@@ -65,10 +67,15 @@ class RAGEngine:
         self._bm25_enabled = cfg.bm25_enabled
         self._chapter_routing = cfg.chapter_query_routing
         self._confidence_threshold = cfg.answer_confidence_threshold
+        self._llm_rerank_enabled = cfg.llm_rerank_enabled
+        self._llm_rerank_top_n = cfg.llm_rerank_top_n
         self._subchunk_enabled = cfg.subchunk_enabled
         self._subchunk_max_tokens = cfg.subchunk_max_tokens
 
         self._bm25 = bm25
+        self._reranker = reranker or (
+            LLMReranker(config=cfg) if cfg.llm_rerank_enabled else None
+        )
         self._kg_path = (
             Path(cfg.chroma_persist_dir) / f"{collection_name}.kg.json"
         )
@@ -213,7 +220,17 @@ class RAGEngine:
             }
 
         fused = reciprocal_rank_fusion(ranked_lists, k=60)
-        results = self._restore_parent_text(fused[:top_k])
+        if self._reranker is not None and is_concept_query(norm_query):
+            try:
+                ordered = self._reranker.rerank(
+                    norm_query, fused[: self._llm_rerank_top_n], top_k
+                )
+                results = self._restore_parent_text(ordered)
+            except Exception as e:
+                logger.warning(f"LLM 重排异常，回退原顺序: {e}")
+                results = self._restore_parent_text(fused[:top_k])
+        else:
+            results = self._restore_parent_text(fused[:top_k])
 
         agree_legs = 0
         if fused:
@@ -235,12 +252,13 @@ class RAGEngine:
     def _restore_parent_text(
         items: list[dict[str, Any]]
     ) -> list[dict[str, Any]]:
-        """命中子块时返回完整父块文本（parent_text），其余原样返回。"""
+        """命中子块时返回完整父块文本，并保留 fragment 为命中片段原文。"""
         restored: list[dict[str, Any]] = []
         for item in items:
             item = dict(item)
             parent_text = item.get("parent_text")
             if parent_text:
+                item["fragment"] = item.get("text")
                 item["text"] = parent_text
             restored.append(item)
         return restored

@@ -13,9 +13,11 @@ from src.utils.eval_metrics import (
     mrr_at_k,
     ndcg_at_k,
     normalize_text,
+    precision_at_k,
     recall_at_k,
     rejection_correct,
     stratified_sample,
+    top1_relevant,
     validate_dataset,
 )
 
@@ -46,6 +48,19 @@ def test_recall_and_mrr():
     assert mrr_at_k(texts, ["答案"], 5) == pytest.approx(1 / 3)
     assert recall_at_k(["a", "b", "c"], ["答案"], 5) == 0.0
     assert mrr_at_k(["a", "b", "c"], ["答案"], 5) == 0.0
+
+
+def test_precision_at_k():
+    texts = ["答案", "a", "答案", "b", "c"]
+    assert precision_at_k(texts, ["答案"], 5) == 0.4
+    assert precision_at_k(["a", "b"], ["答案"], 5) == 0.0
+    assert precision_at_k([], ["答案"], 5) == 0.0
+
+
+def test_top1_relevant():
+    assert top1_relevant(["答案", "b"], ["答案"]) == 1.0
+    assert top1_relevant(["a", "答案"], ["答案"]) == 0.0
+    assert top1_relevant([], ["答案"]) == 0.0
 
 
 def test_ndcg_binary_gains():

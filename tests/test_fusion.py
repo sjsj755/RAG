@@ -49,7 +49,7 @@ def test_deduplicate_by_parent_id():
 
 
 def test_item_key_priority():
-    with_parent = {"parent_id": "p1", "page_num": 2, "text": "x"}
-    assert item_key(with_parent) == ("parent", "p1", 2)
+    with_parent = {"parent_id": "p1", "page_num": 2, "block_id": "b", "text": "x"}
+    assert item_key(with_parent) == ("parent", "p1", 2, "b")
     without_parent = {"page_num": 2, "block_id": "b", "text": "x"}
     assert item_key(without_parent)[0] == 2

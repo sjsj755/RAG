@@ -20,6 +20,8 @@ class ChunkResponse(BaseModel):
     score: float | None = None
     # PaddleOCR 的 block_id 可能是整数或字符串，统一兼容
     block_id: str | int | None = None
+    # 命中子块原文（未子块化时为 None），text 始终为完整父块
+    fragment: str | None = None
 
 
 class SearchRequest(BaseModel):

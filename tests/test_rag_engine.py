@@ -133,6 +133,33 @@ class FakeVectorIndexer:
         return len(self.data)
 
 
+class FakeReranker:
+    def __init__(
+        self, order: list[int] | None = None, fail: bool = False
+    ) -> None:
+        self.order = order or []
+        self.fail = fail
+        self.calls = 0
+
+    def rerank(self, query: str, candidates: list[dict], top_n: int) -> list[dict]:
+        self.calls += 1
+        if self.fail:
+            raise RuntimeError("rerank down")
+        ordered: list[dict] = []
+        seen: set[int] = set()
+        for idx in self.order:
+            if idx < len(candidates) and idx not in seen:
+                ordered.append(candidates[idx])
+                seen.add(idx)
+        for i, candidate in enumerate(candidates):
+            if len(ordered) >= top_n:
+                break
+            if i not in seen:
+                ordered.append(candidate)
+                seen.add(i)
+        return ordered
+
+
 def make_engine(
     monkeypatch,
     tmp_path,
@@ -268,3 +295,77 @@ def test_search_with_confidence_threshold_zero_disables_refusal(tmp_path):
     out = engine.search_with_confidence("问题", top_k=5)
 
     assert out["refused"] is False
+
+
+def _rerank_engine(tmp_path, reranker: FakeReranker) -> RAGEngine:
+    cfg = Settings(
+        _env_file=None,
+        qwen_api_key="k",
+        qwen_base_url="https://example.com/v1",
+        paddleocr_api_key="p",
+        bm25_enabled=False,
+        kg_enabled=False,
+        query_rewrite_enabled=False,
+        chapter_query_routing=False,
+        subchunk_enabled=False,
+        llm_rerank_enabled=True,
+    )
+    return RAGEngine(
+        collection_name="t",
+        parser=FakeParser(),
+        embedder=FakeEmbedder(),
+        indexer=FakeVectorIndexer(),
+        query_rewriter=FakeRewriter([]),
+        knowledge_graph=FakeKnowledgeGraph(),
+        reranker=reranker,
+        config=cfg,
+    )
+
+
+def test_concept_query_uses_reranker(tmp_path):
+    reranker = FakeReranker(order=[2, 0])
+    engine = _rerank_engine(tmp_path, reranker)
+    engine.build_index("fake.pdf")
+
+    out = engine.search_with_confidence("什么是指数函数？", top_k=3)
+
+    assert reranker.calls == 1
+    texts = [r["text"] for r in out["results"]]
+    assert texts[0] == engine.indexer.data[2]["text"]
+    assert texts[1] == engine.indexer.data[0]["text"]
+    assert out["confidence"] == 0.5  # 重排不改变置信度
+
+
+def test_non_concept_query_skips_reranker(tmp_path):
+    reranker = FakeReranker(order=[2, 0])
+    engine = _rerank_engine(tmp_path, reranker)
+    engine.build_index("fake.pdf")
+
+    engine.search("用列举法表示小于10的所有自然数组成的集合", top_k=3)
+
+    assert reranker.calls == 0
+
+
+def test_rerank_failure_falls_back_to_original_order(tmp_path):
+    reranker = FakeReranker(order=[2, 0], fail=True)
+    engine = _rerank_engine(tmp_path, reranker)
+    engine.build_index("fake.pdf")
+
+    out = engine.search_with_confidence("什么是指数函数？", top_k=3)
+
+    assert reranker.calls == 1
+    texts = [r["text"] for r in out["results"]]
+    assert texts == [engine.indexer.data[i]["text"] for i in range(3)]
+
+
+def test_restore_parent_text_keeps_fragment():
+    items = [
+        {
+            "text": "命中片段",
+            "parent_id": "parent_0",
+            "parent_text": "完整父块内容",
+        }
+    ]
+    restored = RAGEngine._restore_parent_text(items)
+    assert restored[0]["text"] == "完整父块内容"
+    assert restored[0]["fragment"] == "命中片段"

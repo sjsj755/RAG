@@ -53,17 +53,27 @@ function setMsg(elementId, text, type = "") {
 
 function renderResultItems(items) {
   return items
-    .map(
-      (item) => `
+    .map((item) => {
+      const hasFragment =
+        item.fragment && item.fragment !== item.text;
+      const body = hasFragment
+        ? `
+          <div class="fragment">${escapeHtml(item.fragment)}</div>
+          <details class="result-context">
+            <summary>查看完整上下文</summary>
+            <p class="result-text">${escapeHtml(item.text)}</p>
+          </details>`
+        : `<p class="result-text">${escapeHtml(item.text)}</p>`;
+      return `
         <div class="result-item">
           <div class="result-meta">
             <span>相关度 ${item.score == null ? "-" : `${(item.score * 100).toFixed(1)}%`}</span>
             <span>页码 ${item.page_num ?? "-"}</span>
             <span>类型 ${escapeHtml(item.type ?? "-")}</span>
           </div>
-          <p class="result-text">${escapeHtml(item.text)}</p>
-        </div>`
-    )
+          ${body}
+        </div>`;
+    })
     .join("");
 }
 

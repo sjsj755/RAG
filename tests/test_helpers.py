@@ -22,6 +22,7 @@ def test_to_dict_pydantic_model():
         "page_num": 2,
         "score": None,
         "block_id": None,
+        "fragment": None,
     }
 
 

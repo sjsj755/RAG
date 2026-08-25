@@ -4,10 +4,15 @@ from typing import Any
 
 
 def item_key(item: dict[str, Any]) -> tuple[Any, ...]:
-    """融合去重键：优先按父块，缺失时回退页码+块号+文本前缀。"""
+    """融合去重键：优先按父块+页码+块号，缺失时回退页码+块号+文本前缀。"""
     parent_id = item.get("parent_id")
     if parent_id:
-        return ("parent", str(parent_id), item.get("page_num", 0))
+        return (
+            "parent",
+            str(parent_id),
+            item.get("page_num", 0),
+            str(item.get("block_id", "")),
+        )
     return (
         item.get("page_num", 0),
         str(item.get("block_id", "")),

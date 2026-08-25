@@ -80,5 +80,7 @@ def test_retrieval_and_confidence_defaults(monkeypatch):
     assert settings.bm25_enabled is True
     assert settings.chapter_query_routing is True
     assert settings.answer_confidence_threshold == 0.55
+    assert settings.llm_rerank_enabled is True
+    assert settings.llm_rerank_top_n == 20
     assert settings.subchunk_enabled is True
     assert settings.subchunk_max_tokens == 160

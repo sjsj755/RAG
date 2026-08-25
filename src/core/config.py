@@ -111,6 +111,9 @@ class Settings(BaseSettings):
     chapter_query_routing: bool = True
     # 低置信度拒绝阈值（0-1，设为 0 关闭拒绝）
     answer_confidence_threshold: float = Field(default=0.55, ge=0.0, le=1.0)
+    # LLM 二阶段重排（仅概念/定义类查询）
+    llm_rerank_enabled: bool = True
+    llm_rerank_top_n: int = Field(default=20, ge=5, le=50)
 
     # ---------- 子块 ----------
     subchunk_enabled: bool = True

@@ -20,9 +20,11 @@ from src.utils.eval_metrics import (
     first_hit_rank,
     mrr_at_k,
     ndcg_at_k,
+    precision_at_k,
     recall_at_k,
     rejection_correct,
     stratified_sample,
+    top1_relevant,
     validate_dataset,
 )
 
@@ -137,6 +139,10 @@ def compute_item(item: dict, payload: dict, top_k: int) -> dict:
     )
     out[f"mrr_at_{top_k}"] = 0.0 if refused else mrr_at_k(texts, terms, top_k)
     out[f"ndcg_at_{top_k}"] = 0.0 if refused else ndcg_at_k(texts, terms, top_k)
+    out[f"precision_at_{top_k}"] = (
+        0.0 if refused else precision_at_k(texts, terms, top_k)
+    )
+    out["top1_relevant"] = 0.0 if refused else top1_relevant(texts, terms)
     out["rejected_correctly"] = (
         refused or rejection_correct(texts, terms, top_k)
         if out["expected_absent"]
@@ -151,7 +157,12 @@ def _mean(values: list[float]) -> float:
 
 def summarize(items: list[dict], top_k: int) -> dict:
     """汇总指标：有答案题算 Recall/MRR/NDCG，无答案题单独算拒答正确率。"""
-    metric_keys = (f"recall_at_{top_k}", f"mrr_at_{top_k}", f"ndcg_at_{top_k}")
+    metric_keys = (
+        f"recall_at_{top_k}",
+        f"mrr_at_{top_k}",
+        f"ndcg_at_{top_k}",
+        f"precision_at_{top_k}",
+    )
     answerable = [
         it for it in items if it.get("answer_terms") and not it["expected_absent"]
     ]
@@ -172,6 +183,9 @@ def summarize(items: list[dict], top_k: int) -> dict:
     }
     for key in metric_keys:
         summary[key] = _mean([it[key] for it in answerable])
+    summary["top1_relevant_rate"] = _mean(
+        [it["top1_relevant"] for it in answerable]
+    )
 
     for cat in CATEGORIES:
         group = [it for it in items if it.get("category") == cat]
@@ -191,6 +205,9 @@ def summarize(items: list[dict], top_k: int) -> dict:
                     key: _mean([it[key] for it in group])
                     for key in metric_keys
                 },
+                "top1_relevant_rate": _mean(
+                    [it["top1_relevant"] for it in group]
+                ),
             }
     return summary
 
@@ -223,6 +240,7 @@ def build_human_review(items: list[dict], count: int, seed: int) -> dict:
                         "page_num": r.get("page_num"),
                         "type": r.get("type"),
                         "text": (r.get("text") or "")[:180],
+                        "fragment": (r.get("fragment") or "")[:180],
                     }
                     for r in it["results"]
                 ],

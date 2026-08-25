@@ -97,6 +97,25 @@ def mrr_at_k(
     return 1.0 / rank if rank else 0.0
 
 
+def precision_at_k(
+    texts: list[str], answer_terms: list[str], top_k: int
+) -> float:
+    """单查询 precision@k：前 k 个结果中相关块占比（无结果时为 0）。"""
+    window = texts[:top_k]
+    if not window:
+        return 0.0
+    return sum(1 for text in window if is_relevant(text, answer_terms)) / len(window)
+
+
+def top1_relevant(
+    texts: list[str], answer_terms: list[str]
+) -> float:
+    """top1 是否相关（0/1）。"""
+    if not texts:
+        return 0.0
+    return 1.0 if is_relevant(texts[0], answer_terms) else 0.0
+
+
 def ndcg_at_k(
     texts: list[str], answer_terms: list[str], top_k: int
 ) -> float:

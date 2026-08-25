@@ -178,6 +178,33 @@ class SemanticChunker:
                 )
         return chunks
 
+    def build_subchunks(
+        self, chunks: list[dict[str, Any]], max_tokens: int
+    ) -> list[dict[str, Any]]:
+        """把父块按句子边界切成子块（无重叠），用于细粒度向量检索。
+
+        子块元数据带 parent_id/parent_text，命中子块时返回完整父块。
+        """
+        subchunks: list[dict[str, Any]] = []
+        for index, chunk in enumerate(chunks):
+            text = chunk.get("text", "")
+            parent_id = chunk.get("parent_id") or f"parent_{index}"
+            pieces = _split_long_text(text, max_tokens, 0.0) or [text]
+            for piece in pieces:
+                sub = dict(chunk)
+                sub.update(
+                    {
+                        "text": piece,
+                        "parent_id": parent_id,
+                        "parent_text": text,
+                        "block_id": chunk.get("block_id", ""),
+                        "page_num": chunk.get("page_num", 0),
+                        "chunk_version": 3,
+                    }
+                )
+                subchunks.append(sub)
+        return subchunks
+
     @staticmethod
     def _flatten(pages: list[dict[str, Any]]) -> list[dict[str, Any]]:
         blocks: list[dict[str, Any]] = []

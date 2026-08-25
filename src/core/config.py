@@ -102,6 +102,20 @@ class Settings(BaseSettings):
     # ---------- 知识图谱 ----------
     kg_enabled: bool = True
 
+    # ---------- 检索 ----------
+    # 每路召回候选深度（RRF 融合后再按请求 top_k 返回）
+    retrieval_candidate_k: int = Field(default=20, ge=5, le=100)
+    # BM25 稀疏检索路开关
+    bm25_enabled: bool = True
+    # 章节/目录类查询路由：只保留同义改写并加入原始查询
+    chapter_query_routing: bool = True
+    # 低置信度拒绝阈值（0-1，设为 0 关闭拒绝）
+    answer_confidence_threshold: float = Field(default=0.55, ge=0.0, le=1.0)
+
+    # ---------- 子块 ----------
+    subchunk_enabled: bool = True
+    subchunk_max_tokens: int = Field(default=160, ge=64, le=256)
+
     # ---------- RAG 内部参数 ----------
     embedding_batch_size: int = Field(default=10, ge=1, le=64)
     default_top_k: int = Field(default=5, ge=1, le=20)

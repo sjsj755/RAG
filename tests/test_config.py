@@ -71,3 +71,14 @@ def test_invalid_log_level_rejected(monkeypatch):
     monkeypatch.setenv("LOG_LEVEL", "VERBOSE")
     with pytest.raises(ValidationError):
         Settings(_env_file=None, **SECRET_ENV)
+
+
+def test_retrieval_and_confidence_defaults(monkeypatch):
+    monkeypatch.setenv("RETRIEVAL_CANDIDATE_K", "25")
+    settings = Settings(_env_file=None, **SECRET_ENV)
+    assert settings.retrieval_candidate_k == 25
+    assert settings.bm25_enabled is True
+    assert settings.chapter_query_routing is True
+    assert settings.answer_confidence_threshold == 0.55
+    assert settings.subchunk_enabled is True
+    assert settings.subchunk_max_tokens == 160

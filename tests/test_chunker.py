@@ -121,5 +121,55 @@ def test_metadata_inherited():
     assert content["block_id"] == "b1"
 
 
+def test_build_subchunks_splits_long_parent():
+    text = "集合是数学的基础。" * 40
+    chunk = {
+        "text": text,
+        "type": "text",
+        "page_num": 3,
+        "block_id": "b1",
+        "parent_id": "parent_0",
+        "chunk_version": 2,
+    }
+    subs = SemanticChunker().build_subchunks([chunk], max_tokens=100)
+
+    assert len(subs) > 1
+    for sub in subs:
+        assert sub["parent_id"] == "parent_0"
+        assert sub["parent_text"] == text
+        assert sub["chunk_version"] == 3
+        assert sub["page_num"] == 3
+        assert sub["text"].rstrip().endswith("。")
+        assert _token_len(sub["text"]) <= 100
+
+
+def test_build_subchunks_short_parent_single():
+    chunk = {
+        "text": "短文本",
+        "type": "text",
+        "page_num": 1,
+        "block_id": "b1",
+        "parent_id": "parent_0",
+    }
+    subs = SemanticChunker().build_subchunks([chunk], max_tokens=160)
+    assert len(subs) == 1
+    assert subs[0]["text"] == "短文本"
+    assert subs[0]["parent_text"] == "短文本"
+
+
+def test_build_subchunks_overlong_sentence_stands_alone():
+    long_text = "这是一个没有标点的超长句子" * 30
+    chunk = {
+        "text": long_text,
+        "type": "text",
+        "page_num": 1,
+        "block_id": "b1",
+        "parent_id": "parent_0",
+    }
+    subs = SemanticChunker().build_subchunks([chunk], max_tokens=100)
+    assert len(subs) == 1
+    assert subs[0]["text"] == long_text
+
+
 def test_token_len_fallback():
     assert _token_len("中文测试") >= 1

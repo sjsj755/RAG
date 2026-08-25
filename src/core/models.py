@@ -32,6 +32,8 @@ class SearchResponse(BaseModel):
     query: str
     results: list[ChunkResponse]
     total: int
+    confidence: float | None = None
+    refused: bool = False
 
 
 class DocumentInfo(BaseModel):

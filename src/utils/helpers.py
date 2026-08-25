@@ -38,3 +38,16 @@ def ensure_dir(path: str) -> Path:
     p = Path(path)
     p.mkdir(parents=True, exist_ok=True)
     return p
+
+
+def compute_confidence(
+    max_cosine: float, agree_legs: int, leg_count: int
+) -> float:
+    """检索置信度 = 最大余弦 × (0.5 + 0.5 × 多路一致比例)。
+
+    单路检索时一致比例为 1，置信度退化为最大余弦；无向量结果时为 0。
+    """
+    if max_cosine <= 0 or leg_count <= 0:
+        return 0.0
+    ratio = agree_legs / leg_count if leg_count else 0.0
+    return max_cosine * (0.5 + 0.5 * ratio)

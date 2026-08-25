@@ -238,11 +238,15 @@ async def search_document(
             f"文档尚未完成索引，当前状态: {doc_info.status.value}",
         )
 
-    results = kb.search(doc_id, request.query, request.top_k)
+    outcome = kb.search_with_confidence(
+        doc_id, request.query, request.top_k
+    )
     return SearchResponse(
         query=request.query,
-        results=[ChunkResponse(**result) for result in results],
-        total=len(results),
+        results=[ChunkResponse(**result) for result in outcome["results"]],
+        total=len(outcome["results"]),
+        confidence=outcome["confidence"],
+        refused=outcome["refused"],
     )
 
 

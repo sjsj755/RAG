@@ -51,6 +51,22 @@ function setMsg(elementId, text, type = "") {
   el.className = "msg" + (type ? ` ${type}` : "");
 }
 
+function renderResultItems(items) {
+  return items
+    .map(
+      (item) => `
+        <div class="result-item">
+          <div class="result-meta">
+            <span>相关度 ${item.score == null ? "-" : `${(item.score * 100).toFixed(1)}%`}</span>
+            <span>页码 ${item.page_num ?? "-"}</span>
+            <span>类型 ${escapeHtml(item.type ?? "-")}</span>
+          </div>
+          <p class="result-text">${escapeHtml(item.text)}</p>
+        </div>`
+    )
+    .join("");
+}
+
 let documents = [];
 
 async function refreshDocuments() {
@@ -203,20 +219,27 @@ document.getElementById("search-btn").addEventListener("click", async () => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ query, top_k: topK }),
     });
-    setMsg("search-msg", `找到 ${data.total} 个相关片段`, "ok");
-    resultsBox.innerHTML = data.results
-      .map(
-        (item) => `
-          <div class="result-item">
-            <div class="result-meta">
-              <span>相关度 ${item.score == null ? "-" : `${(item.score * 100).toFixed(1)}%`}</span>
-              <span>页码 ${item.page_num ?? "-"}</span>
-              <span>类型 ${escapeHtml(item.type ?? "-")}</span>
-            </div>
-            <p class="result-text">${escapeHtml(item.text)}</p>
-          </div>`
-      )
-      .join("");
+    const confidenceText =
+      data.confidence == null ? "-" : `${(data.confidence * 100).toFixed(1)}%`;
+    if (data.refused) {
+      setMsg(
+        "search-msg",
+        `未找到足够可靠的答案（置信度 ${confidenceText}），以下为低置信度片段，请人工判断`,
+        "warn"
+      );
+      resultsBox.innerHTML = `
+        <details class="result-details">
+          <summary>查看低置信度片段（${data.results.length} 条）</summary>
+          ${renderResultItems(data.results)}
+        </details>`;
+    } else {
+      setMsg(
+        "search-msg",
+        `找到 ${data.total} 个相关片段（置信度 ${confidenceText}）`,
+        "ok"
+      );
+      resultsBox.innerHTML = renderResultItems(data.results);
+    }
   } catch (err) {
     setMsg("search-msg", `检索失败：${err.message}`, "error");
   } finally {

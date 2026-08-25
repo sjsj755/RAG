@@ -1,6 +1,6 @@
 """RAGEngine 集成测试：真实分块器 + 假解析/嵌入/改写/图谱。"""
 
-from src.core.config import settings
+from src.core.config import Settings, settings
 from src.core.rag_engine import RAGEngine
 
 
@@ -98,6 +98,41 @@ class FakeKnowledgeGraph:
         pass
 
 
+class FakeVectorIndexer:
+    """固定分数向量索引器：query 返回按位置递减的 score。"""
+
+    def __init__(self) -> None:
+        self.data: list[dict] = []
+        self.collection = type(
+            "FakeCollection",
+            (),
+            {
+                "get": lambda self, **kwargs: {
+                    "documents": [],
+                    "metadatas": [],
+                }
+            },
+        )()
+
+    def clear(self) -> None:
+        self.data = []
+
+    def drop(self) -> None:
+        pass
+
+    def add(self, chunks: list[dict], embeddings: list[list[float]]) -> None:
+        self.data = list(chunks)
+
+    def query(self, query_vector: list[float], top_k: int = 5) -> list[dict]:
+        return [
+            dict(chunk, score=0.5 - i * 0.01)
+            for i, chunk in enumerate(self.data[:top_k])
+        ]
+
+    def count(self) -> int:
+        return len(self.data)
+
+
 def make_engine(
     monkeypatch,
     tmp_path,
@@ -165,3 +200,71 @@ def test_search_merges_knowledge_graph_candidates(monkeypatch, tmp_path):
     texts = [item["text"] for item in results]
 
     assert "图谱候选块" in texts
+
+
+def test_chapter_query_keeps_first_variant_and_adds_original(
+    monkeypatch, tmp_path
+):
+    engine = make_engine(
+        monkeypatch, tmp_path, rewriter=FakeRewriter(["变体1", "变体2"])
+    )
+    engine.build_index("fake.pdf")
+    engine.embedder.embedded.clear()
+
+    engine.search("第一章包含哪些小节？", top_k=3)
+
+    assert engine.embedder.embedded == ["变体1", "第一章包含哪些小节？"]
+
+
+def _confidence_engine(tmp_path, threshold: float) -> RAGEngine:
+    cfg = Settings(
+        _env_file=None,
+        qwen_api_key="k",
+        qwen_base_url="https://example.com/v1",
+        paddleocr_api_key="p",
+        answer_confidence_threshold=threshold,
+        bm25_enabled=False,
+        kg_enabled=False,
+        query_rewrite_enabled=False,
+        chapter_query_routing=False,
+        subchunk_enabled=False,
+    )
+    return RAGEngine(
+        collection_name="t",
+        parser=FakeParser(),
+        embedder=FakeEmbedder(),
+        indexer=FakeVectorIndexer(),
+        query_rewriter=FakeRewriter([]),
+        knowledge_graph=FakeKnowledgeGraph(),
+        config=cfg,
+    )
+
+
+def test_search_with_confidence_refuses_below_threshold(tmp_path):
+    engine = _confidence_engine(tmp_path, threshold=0.7)
+    engine.build_index("fake.pdf")
+
+    out = engine.search_with_confidence("问题", top_k=5)
+
+    assert out["refused"] is True
+    assert out["confidence"] == 0.5  # 单路一致：0.5 × (0.5 + 0.5)
+    assert out["results"]
+
+
+def test_search_with_confidence_keeps_results_when_above_threshold(tmp_path):
+    engine = _confidence_engine(tmp_path, threshold=0.4)
+    engine.build_index("fake.pdf")
+
+    out = engine.search_with_confidence("问题", top_k=5)
+
+    assert out["refused"] is False
+    assert out["results"]
+
+
+def test_search_with_confidence_threshold_zero_disables_refusal(tmp_path):
+    engine = _confidence_engine(tmp_path, threshold=0.0)
+    engine.build_index("fake.pdf")
+
+    out = engine.search_with_confidence("问题", top_k=5)
+
+    assert out["refused"] is False

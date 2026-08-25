@@ -166,6 +166,24 @@ th {
   color: var(--ok);
 }
 
+.msg.warn {
+  color: #b45309;
+}
+
+.result-details {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fff7ed;
+}
+
+.result-details summary {
+  font-size: 13px;
+  color: #b45309;
+  cursor: pointer;
+}
+
 .result-item {
   padding: 12px;
   border: 1px solid var(--border);

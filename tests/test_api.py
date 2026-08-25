@@ -71,6 +71,15 @@ class FakeKnowledgeBase:
             }
         ]
 
+    def search_with_confidence(
+        self, doc_id: str, query: str, top_k: int = 5
+    ) -> dict:
+        return {
+            "results": self.search(doc_id, query, top_k),
+            "confidence": 0.9,
+            "refused": False,
+        }
+
     def delete_document(self, doc_id: str) -> None:
         self.docs.pop(doc_id, None)
 

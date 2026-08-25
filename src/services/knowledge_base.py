@@ -167,6 +167,15 @@ class KnowledgeBaseService:
             raise ValueError(f"文档不存在: {doc_id}")
         return engine.search(query, top_k)
 
+    def search_with_confidence(
+        self, doc_id: str, query: str, top_k: int = 5
+    ) -> dict:
+        """在文档中检索并返回置信度与拒绝标记。"""
+        engine = self.get_engine(doc_id)
+        if not engine:
+            raise ValueError(f"文档不存在: {doc_id}")
+        return engine.search_with_confidence(query, top_k)
+
     def delete_document(self, doc_id: str) -> None:
         """删除文档：移除索引集合、引擎实例与注册表记录。"""
         with self._lock:

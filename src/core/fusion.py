@@ -3,6 +3,18 @@
 from typing import Any
 
 
+def item_key(item: dict[str, Any]) -> tuple[Any, ...]:
+    """融合去重键：优先按父块，缺失时回退页码+块号+文本前缀。"""
+    parent_id = item.get("parent_id")
+    if parent_id:
+        return ("parent", str(parent_id), item.get("page_num", 0))
+    return (
+        item.get("page_num", 0),
+        str(item.get("block_id", "")),
+        item.get("text", "")[:200],
+    )
+
+
 def reciprocal_rank_fusion(
     ranked_lists: list[list[dict[str, Any]]],
     k: int = 60,
@@ -13,11 +25,7 @@ def reciprocal_rank_fusion(
 
     for ranked in ranked_lists:
         for rank, item in enumerate(ranked, start=1):
-            key = (
-                item.get("page_num", 0),
-                str(item.get("block_id", "")),
-                item.get("text", "")[:200],
-            )
+            key = item_key(item)
             entry = scores.setdefault(key, {"item": item, "score": 0.0})
             entry["score"] += 1.0 / (k + rank)
 

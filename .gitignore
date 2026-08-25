@@ -16,6 +16,8 @@ chroma_db/
 logs/
 registry.json
 eval_results*.json
+eval_report*.json
+eval_human_review*.json
 test_uploads/
 test_chroma/
 test_logs/

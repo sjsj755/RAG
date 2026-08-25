@@ -2,6 +2,7 @@ import chromadb
 import pytest
 
 from src.core.config import Settings
+from src.core.knowledge_graph import RuleKnowledgeGraph
 from src.core.models import DocumentStatus
 from src.services.knowledge_base import KnowledgeBaseService
 
@@ -61,6 +62,66 @@ class FakeAnswerGenerator:
         if self.raise_error:
             raise RuntimeError("boom")
         yield from self.pieces
+
+
+class FakeEmbedder:
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        return [[0.1, 0.2, 0.3, 0.4] for _ in texts]
+
+
+class FakeGroupEngine:
+    """分组共享集合引擎替身。"""
+
+    def __init__(self, group_id: str) -> None:
+        self.group_id = group_id
+        self.added: list[dict] = []
+        self.deleted: str | None = None
+        self.invalidate_calls = 0
+        self.knowledge_graph = None
+
+    class Indexer:
+        def __init__(self, engine):
+            self.engine = engine
+
+        def add(self, chunks: list[dict], embeddings: list[list[float]]) -> None:
+            self.engine.added.extend(chunks)
+
+        def delete_by_doc_id(self, doc_id: str) -> None:
+            self.engine.deleted = doc_id
+
+    @property
+    def indexer(self):
+        return self.Indexer(self)
+
+    def add_document(
+        self, pdf_path: str, doc_id: str, filename: str
+    ) -> dict:
+        return {
+            "total_chunks": 3,
+            "parent_chunks": 2,
+            "chunks": [
+                {"text": f"块{i}", "type": "text", "page_num": i}
+                for i in range(2)
+            ],
+        }
+
+    def invalidate_bm25(self) -> None:
+        self.invalidate_calls += 1
+
+    def search_with_confidence(self, query: str, top_k: int = 5) -> dict:
+        return {
+            "results": [
+                {
+                    "text": "组内结果",
+                    "page_num": 1,
+                    "doc_id": "doc_a",
+                    "filename": "a.pdf",
+                    "score": 0.8,
+                }
+            ],
+            "confidence": 0.8,
+            "refused": False,
+        }
 
 
 class StubKB(KnowledgeBaseService):
@@ -164,6 +225,7 @@ def test_cleanup_keeps_known_collections(tmp_path):
         engine_factory=lambda doc_id: FakeEngine(doc_id),
     )
     doc_id = service.create_document("a.pdf", 1)
+    group = service.create_group("必修一")
 
     client = chromadb.PersistentClient(
         path=config.chroma_persist_dir,
@@ -173,11 +235,14 @@ def test_cleanup_keeps_known_collections(tmp_path):
     client.create_collection(name=f"doc_{doc_id}")  # 旧命名：doc_<doc_id>
     client.create_collection(name="doc_orphan")  # 真正的孤儿
 
+    client.create_collection(name=group.id)
+
     service._cleanup_orphan_collections()
 
     names = [collection.name for collection in client.list_collections()]
     assert doc_id in names
     assert f"doc_{doc_id}" in names
+    assert group.id in names
     assert "doc_orphan" not in names
 
 
@@ -190,6 +255,7 @@ def test_delete_removes_collection_even_without_cached_engine(tmp_path):
         chroma_persist_dir=str(tmp_path / "chroma"),
         registry_file=str(tmp_path / "registry.json"),
         upload_dir=str(tmp_path / "uploads"),
+        groups_file=str(tmp_path / "groups.json"),
     )
     service = KnowledgeBaseService(
         config=config,
@@ -248,8 +314,22 @@ def test_answer_builds_sources_and_generates(tmp_path):
     assert result["answer"] == "集合定义"
     assert result["refused"] is False
     assert result["sources"] == [
-        {"index": 1, "page_num": 9, "text": "命中片段", "score": 0.8},
-        {"index": 2, "page_num": 10, "text": "第二个块", "score": 0.7},
+        {
+            "index": 1,
+            "page_num": 9,
+            "text": "命中片段",
+            "score": 0.8,
+            "doc_id": None,
+            "filename": None,
+        },
+        {
+            "index": 2,
+            "page_num": 10,
+            "text": "第二个块",
+            "score": 0.7,
+            "doc_id": None,
+            "filename": None,
+        },
     ]
     assert generator.generate_calls == 1
 
@@ -293,3 +373,144 @@ def test_stream_answer_events_refused(tmp_path):
     assert [event["type"] for event in events] == ["refused", "done"]
     assert events[0]["reason"] == "检索置信度不足，未生成答案"
     assert generator.stream_calls == 0
+
+
+def make_group_service(tmp_path, group_engine=None):
+    config = Settings(
+        _env_file=None,
+        qwen_api_key="k",
+        qwen_base_url="https://example.com/v1",
+        paddleocr_api_key="p",
+        chroma_persist_dir=str(tmp_path / "chroma"),
+        registry_file=str(tmp_path / "registry.json"),
+        upload_dir=str(tmp_path / "uploads"),
+        groups_file=str(tmp_path / "groups.json"),
+    )
+    engine = (
+        group_engine if group_engine is not None else FakeGroupEngine("default")
+    )
+    return KnowledgeBaseService(
+        config=config,
+        reconcile=False,
+        group_engine_factory=lambda group_id: engine,
+        answer_generator=FakeAnswerGenerator(),
+        embedder=FakeEmbedder(),
+    )
+
+
+def test_group_crud_and_persistence(tmp_path):
+    service = make_group_service(tmp_path)
+
+    group = service.create_group("必修一")
+    assert group.id.startswith("group_")
+    assert service.get_group(group.id).name == "必修一"
+    assert [g.id for g in service.list_groups()] == [group.id]
+
+    # 新实例从文件恢复
+    service2 = make_group_service(tmp_path)
+    assert service2.get_group(group.id) is not None
+
+
+def test_index_into_group_flow(tmp_path):
+    service = make_group_service(tmp_path)
+    group = service.create_group("必修一")
+    doc_id = service.create_document("math.pdf", 10)
+
+    result = service.index_into_group(group.id, doc_id, "/tmp/math.pdf")
+
+    assert result["total_chunks"] == 3
+    assert group.doc_ids == [doc_id]
+    assert service.get_document_info(doc_id).status == DocumentStatus.COMPLETED
+    assert service.get_document_info(doc_id).total_chunks == 3
+    assert (tmp_path / "chroma" / f"{doc_id}.kg.json").exists()
+    assert (tmp_path / "chroma" / f"{group.id}.kg.json").exists()
+
+
+def test_index_into_group_rejects_already_member(tmp_path):
+    service = make_group_service(tmp_path)
+    group = service.create_group("必修一")
+    doc_id = service.create_document("math.pdf", 10)
+    service.index_into_group(group.id, doc_id, "/tmp/math.pdf")
+
+    with pytest.raises(ValueError, match="已在分组中"):
+        service.index_into_group(group.id, doc_id, "/tmp/math.pdf")
+
+
+def test_group_remove_document_marks_pending(tmp_path):
+    service = make_group_service(tmp_path)
+    group = service.create_group("必修一")
+    doc_id = service.create_document("math.pdf", 10)
+    service.index_into_group(group.id, doc_id, "/tmp/math.pdf")
+    engine = service.get_group_engine(group.id)
+
+    service.group_remove_document(group.id, doc_id)
+
+    assert group.doc_ids == []
+    assert service.get_document_info(doc_id).status == DocumentStatus.PENDING
+    assert engine.deleted == doc_id
+
+
+def test_delete_group_marks_members_pending(tmp_path):
+    service = make_group_service(tmp_path)
+    group = service.create_group("必修一")
+    doc_id = service.create_document("math.pdf", 10)
+    service.index_into_group(group.id, doc_id, "/tmp/math.pdf")
+
+    service.delete_group(group.id)
+
+    assert service.get_group(group.id) is None
+    assert service.get_document_info(doc_id).status == DocumentStatus.PENDING
+
+
+def test_migrate_group_moves_completed_docs(tmp_path):
+    service = make_group_service(tmp_path)
+    group = service.create_group("必修一")
+    doc_a = service.create_document("a.pdf", 10)
+    doc_b = service.create_document("b.pdf", 10)
+    for doc_id in (doc_a, doc_b):
+        service.update_document_status(
+            doc_id, DocumentStatus.COMPLETED, total_chunks=2
+        )
+        kg = RuleKnowledgeGraph()
+        kg.build(
+            [
+                {
+                    "text": f"{doc_id} 的集合内容",
+                    "type": "text",
+                    "page_num": 1,
+                    "block_id": "1",
+                }
+            ]
+        )
+        kg.save(tmp_path / "chroma" / f"{doc_id}.kg.json")
+
+    result = service.migrate_group(group.id)
+
+    assert result["succeeded"] == 2
+    assert result["failed"] == 0
+    assert set(group.doc_ids) == {doc_a, doc_b}
+    engine = service.get_group_engine(group.id)
+    assert len(engine.added) == 2
+    assert all(c.get("doc_id") in {doc_a, doc_b} for c in engine.added)
+
+
+def test_group_search_and_answer(tmp_path):
+    engine = FakeGroupEngine("g1")
+    service = make_group_service(tmp_path, group_engine=engine)
+    group = service.create_group("必修一")
+
+    outcome = service.group_search_with_confidence(group.id, "函数", top_k=3)
+    assert outcome["results"][0]["doc_id"] == "doc_a"
+    assert outcome["results"][0]["filename"] == "a.pdf"
+
+    result = service.group_answer(group.id, "什么是函数？")
+    assert result["answer"] == "生成答案"
+    assert result["sources"][0]["doc_id"] == "doc_a"
+
+    events = list(service.group_stream_answer(group.id, "什么是函数？"))
+    assert [event["type"] for event in events] == [
+        "sources",
+        "answer",
+        "answer",
+        "done",
+    ]

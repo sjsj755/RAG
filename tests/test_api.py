@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 
 from src.api.dependencies import get_knowledge_base
 from src.core.config import settings
-from src.core.models import DocumentInfo, DocumentStatus
+from src.core.models import DocumentInfo, DocumentStatus, GroupInfo
 from src.main import app
 
 
@@ -16,6 +16,8 @@ class FakeKnowledgeBase:
     def __init__(self) -> None:
         self.docs: dict[str, DocumentInfo] = {}
         self._seq = 0
+        self.groups: dict[str, GroupInfo] = {}
+        self._gseq = 0
         self.refused = False
         self.answer_error = False
 
@@ -126,6 +128,105 @@ class FakeKnowledgeBase:
         yield {"type": "answer", "content": "定义"}
         yield {"type": "answer", "content": "答案"}
         yield {"type": "done", "refused": False, "confidence": 0.9}
+
+    def create_group(self, name: str) -> GroupInfo:
+        self._gseq += 1
+        group_id = f"group_test_{self._gseq}"
+        now = datetime.now(UTC)
+        group = GroupInfo(
+            id=group_id,
+            name=name,
+            doc_ids=[],
+            created_at=now,
+            updated_at=now,
+        )
+        self.groups[group_id] = group
+        return group
+
+    def list_groups(self):
+        return list(self.groups.values())
+
+    def get_group(self, group_id: str):
+        return self.groups.get(group_id)
+
+    def delete_group(self, group_id: str) -> None:
+        self.groups.pop(group_id, None)
+
+    def index_into_group(self, group_id: str, doc_id: str, pdf_path: str) -> dict:
+        self.groups[group_id].doc_ids.append(doc_id)
+        self.docs[doc_id].status = DocumentStatus.COMPLETED
+        self.docs[doc_id].total_chunks = 3
+        return {"group_id": group_id, "total_chunks": 3}
+
+    def migrate_group(self, group_id: str) -> dict:
+        return {
+            "group_id": group_id,
+            "total": 1,
+            "succeeded": 1,
+            "failed": 0,
+            "results": [],
+        }
+
+    def group_remove_document(self, group_id: str, doc_id: str) -> None:
+        self.groups[group_id].doc_ids.remove(doc_id)
+        self.docs[doc_id].status = DocumentStatus.PENDING
+
+    def group_search_with_confidence(
+        self, group_id: str, query: str, top_k: int = 5
+    ) -> dict:
+        return {
+            "results": [
+                {
+                    "text": "组内命中",
+                    "type": "text",
+                    "page_num": 2,
+                    "block_id": 1,
+                    "score": 0.8,
+                    "doc_id": "doc_a",
+                    "filename": "a.pdf",
+                }
+            ],
+            "confidence": 0.8,
+            "refused": False,
+        }
+
+    def group_answer(self, group_id: str, query: str, top_k: int = 5) -> dict:
+        return {
+            "query": query,
+            "answer": "组内答案",
+            "refused": False,
+            "refusal_reason": None,
+            "confidence": 0.8,
+            "sources": [
+                {
+                    "index": 1,
+                    "page_num": 2,
+                    "text": "片段",
+                    "score": 0.8,
+                    "doc_id": "doc_a",
+                    "filename": "a.pdf",
+                }
+            ],
+        }
+
+    def group_stream_answer(self, group_id: str, query: str, top_k: int = 5):
+        yield {
+            "type": "sources",
+            "sources": [
+                {
+                    "index": 1,
+                    "page_num": 2,
+                    "text": "片段",
+                    "score": 0.8,
+                    "doc_id": "doc_a",
+                    "filename": "a.pdf",
+                }
+            ],
+            "confidence": 0.8,
+        }
+        yield {"type": "answer", "content": "组内"}
+        yield {"type": "answer", "content": "答案"}
+        yield {"type": "done", "refused": False, "confidence": 0.8}
 
     def delete_document(self, doc_id: str) -> None:
         self.docs.pop(doc_id, None)
@@ -453,3 +554,130 @@ def test_answer_stream_error_event(client):
     )
     assert response.status_code == 200
     assert '"type":"error"' in response.text
+
+
+def test_group_crud(client):
+    test_client, fake = client
+
+    response = test_client.post(
+        "/api/v1/groups", json={"name": "必修一"}
+    )
+    assert response.status_code == 201
+    group_id = response.json()["id"]
+    assert group_id.startswith("group_")
+
+    response = test_client.get("/api/v1/groups")
+    assert response.status_code == 200
+    assert [g["id"] for g in response.json()] == [group_id]
+
+    response = test_client.get(f"/api/v1/groups/{group_id}")
+    assert response.status_code == 200
+    assert response.json()["name"] == "必修一"
+
+    response = test_client.get("/api/v1/groups/not_exists")
+    assert response.status_code == 404
+
+    response = test_client.delete(f"/api/v1/groups/{group_id}")
+    assert response.status_code == 200
+    assert fake.get_group(group_id) is None
+
+
+def test_group_index_document(client):
+    test_client, fake = client
+    group = fake.create_group("必修一")
+    doc_id = fake.create_document("math.pdf", 10)
+    upload_dir = Path(settings.upload_dir)
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    (upload_dir / f"{doc_id}.pdf").write_bytes(b"%PDF-1.4")
+
+    response = test_client.post(f"/api/v1/groups/{group.id}/index/{doc_id}")
+
+    assert response.status_code == 202
+    assert doc_id in fake.get_group(group.id).doc_ids
+    assert fake.get_document_info(doc_id).status == DocumentStatus.COMPLETED
+
+
+def test_group_index_doc_not_found(client):
+    test_client, fake = client
+    group = fake.create_group("必修一")
+    response = test_client.post(f"/api/v1/groups/{group.id}/index/not_exists")
+    assert response.status_code == 404
+
+
+def test_group_remove_document(client):
+    test_client, fake = client
+    group = fake.create_group("必修一")
+    doc_id = fake.create_document("math.pdf", 10)
+    fake.index_into_group(group.id, doc_id, "/tmp/math.pdf")
+
+    response = test_client.delete(
+        f"/api/v1/groups/{group.id}/documents/{doc_id}"
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "removed"
+    assert doc_id not in fake.get_group(group.id).doc_ids
+    assert fake.get_document_info(doc_id).status == DocumentStatus.PENDING
+
+
+def test_group_migrate(client):
+    test_client, fake = client
+    group = fake.create_group("必修一")
+    response = test_client.post(f"/api/v1/groups/{group.id}/migrate")
+    assert response.status_code == 202
+    assert response.json()["status"] == "processing"
+
+
+def test_group_search(client):
+    test_client, fake = client
+    group = fake.create_group("必修一")
+    response = test_client.post(
+        f"/api/v1/groups/{group.id}/search",
+        json={"query": "函数", "top_k": 3},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["results"][0]["text"] == "组内命中"
+    assert body["results"][0]["doc_id"] == "doc_a"
+    assert body["results"][0]["filename"] == "a.pdf"
+
+
+def test_group_search_404(client):
+    test_client, _ = client
+    response = test_client.post(
+        "/api/v1/groups/not_exists/search", json={"query": "函数"}
+    )
+    assert response.status_code == 404
+
+
+def test_group_answer_and_stream(client):
+    test_client, fake = client
+    group = fake.create_group("必修一")
+
+    response = test_client.post(
+        f"/api/v1/groups/{group.id}/answer",
+        json={"query": "什么是函数？"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["answer"] == "组内答案"
+    assert body["sources"][0]["doc_id"] == "doc_a"
+    assert body["sources"][0]["filename"] == "a.pdf"
+
+    response = test_client.post(
+        f"/api/v1/groups/{group.id}/answer?stream=true",
+        json={"query": "什么是函数？"},
+    )
+    assert response.status_code == 200
+    text = response.text
+    assert '"type":"sources"' in text
+    assert '"type":"answer"' in text
+    assert '"type":"done"' in text
+
+
+def test_group_answer_404(client):
+    test_client, _ = client
+    response = test_client.post(
+        "/api/v1/groups/not_exists/answer", json={"query": "函数"}
+    )
+    assert response.status_code == 404

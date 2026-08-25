@@ -104,3 +104,13 @@ class VectorIndexer:
 
     def count(self) -> int:
         return self.collection.count()
+
+    def delete_by_doc_id(self, doc_id: str) -> None:
+        """删除集合中属于指定文档的全部向量（共享集合场景）。"""
+        try:
+            self.collection.delete(where={"doc_id": doc_id})
+            logger.info(
+                f"集合 {self.collection_name} 中 {doc_id} 的向量已删除"
+            )
+        except Exception:
+            logger.warning(f"删除 {doc_id} 向量失败或不存在")

@@ -10,6 +10,7 @@ ChromaDB 持久化索引 → 多路融合检索 → LLM 重排 → 置信度门�
 - 异步索引（`BackgroundTasks`），文档状态机：`pending → processing → completed / failed`
 - LLM 答案生成：DeepSeek 基于检索片段生成带 `[n]` 引用的答案，支持 JSON 与 SSE 流式，
   低置信度时直接拒绝（不调用 LLM）
+- 分组联合索引：命名分组共享一个 Chroma 集合，多文档联合检索/问答，支持存量迁移
 - 检索链路：
   - DeepSeek 查询改写（CARE 提示词：同义改写 + 关键词扩展，embedding 相似度过滤）
   - 章节/目录类查询路由（只保留同义改写，并加入原始查询）
@@ -101,6 +102,15 @@ uv run python -m src.run
 | POST | `/api/v1/index/{doc_id}` | 提交异步索引任务（202） |
 | POST | `/api/v1/search/{doc_id}` | 检索；响应含 `confidence`、`refused`，结果项含 `fragment` |
 | POST | `/api/v1/answer/{doc_id}` | 检索并生成答案；`?stream=true` 时 SSE 流式，低置信直接拒绝 |
+| POST | `/api/v1/groups` | 创建分组（201） |
+| GET | `/api/v1/groups` | 列出全部分组 |
+| GET | `/api/v1/groups/{id}` | 分组详情 |
+| DELETE | `/api/v1/groups/{id}` | 删除分组（成员文档标记为 pending） |
+| POST | `/api/v1/groups/{id}/index/{doc_id}` | 把文档编入分组（后台） |
+| DELETE | `/api/v1/groups/{id}/documents/{doc_id}` | 把文档移出分组（标记 pending） |
+| POST | `/api/v1/groups/{id}/migrate` | 把全部已索引文档迁移进分组（后台，不触发 OCR） |
+| POST | `/api/v1/groups/{id}/search` | 分组内联合检索（结果带 doc_id/filename） |
+| POST | `/api/v1/groups/{id}/answer` | 分组内问答；`?stream=true` 时 SSE 流式 |
 | GET | `/api/v1/documents` | 列出全部文档 |
 | GET | `/api/v1/documents/{doc_id}` | 文档详情 |
 | DELETE | `/api/v1/documents/{doc_id}` | 删除文档+索引+文件 |
@@ -236,6 +246,31 @@ curl -X POST "http://localhost:8000/api/v1/answer/doc_xxx" \
 答案中的 `[n]` 对应 `sources` 数组中 `index=n` 的条目；调用方按编号映射到
 `page_num` 即可定位教材页码。
 
+## 分组联合索引
+
+分组是共享检索空间：组内每个文档的块写入同一个 Chroma 集合（元数据带
+`doc_id/filename`），检索与问答跨全组一次完成；新文档上传后通过
+`POST /api/v1/groups/{id}/index/{doc_id}` 增量编入，无需重建整组。
+
+```bash
+# 1. 创建分组
+curl -X POST http://localhost:8000/api/v1/groups \
+  -H "Content-Type: application/json" -d '{"name": "必修一"}'
+
+# 2. 把存量已索引文档迁移进分组（后台任务，基于 KG 数据，不重新 OCR）
+curl -X POST http://localhost:8000/api/v1/groups/<group_id>/migrate
+
+# 3. 分组内联合检索 / 问答
+curl -X POST http://localhost:8000/api/v1/groups/<group_id>/search \
+  -H "Content-Type: application/json" -d '{"query": "什么是集合？", "top_k": 5}'
+curl -X POST "http://localhost:8000/api/v1/groups/<group_id>/answer?stream=true" \
+  -H "Content-Type: application/json" -d '{"query": "什么是集合？"}'
+```
+
+说明：文档的正式索引在分组模式下只存在于组集合（迁移或编入后旧单文档集合会被清理）；
+移出分组或删除分组会把文档标记为 `pending`，需要重新索引。分组注册表持久化在
+`groups.json`（默认 `GROUPS_FILE` 可配置）。
+
 ## 检索评测
 
 ```bash
@@ -273,6 +308,7 @@ python scripts/rebuild_index.py --doc-id <doc_id>
 | `ANSWER_MAX_TOKENS` | 1024 | 答案生成最大 token 数 |
 | `SUBCHUNK_ENABLED` | true | 子块化索引开关 |
 | `SUBCHUNK_MAX_TOKENS` | 160 | 子块 token 上限 |
+| `GROUPS_FILE` | ./groups.json | 分组注册表路径 |
 
 兼容旧的拼写错误键名（如 `QWEN3_API_KEY`、`PADLLEOCR_API_KEY`、
 `QWEM3_MODLE_NAME`），推荐迁移到新命名。

@@ -121,7 +121,7 @@ class FakeVectorIndexer:
         pass
 
     def add(self, chunks: list[dict], embeddings: list[list[float]]) -> None:
-        self.data = list(chunks)
+        self.data.extend(chunks)
 
     def query(self, query_vector: list[float], top_k: int = 5) -> list[dict]:
         return [
@@ -369,3 +369,46 @@ def test_restore_parent_text_keeps_fragment():
     restored = RAGEngine._restore_parent_text(items)
     assert restored[0]["text"] == "完整父块内容"
     assert restored[0]["fragment"] == "命中片段"
+
+
+def _add_document_engine(tmp_path) -> RAGEngine:
+    cfg = Settings(
+        _env_file=None,
+        qwen_api_key="k",
+        qwen_base_url="https://example.com/v1",
+        paddleocr_api_key="p",
+        bm25_enabled=False,
+        kg_enabled=False,
+        query_rewrite_enabled=False,
+        chapter_query_routing=False,
+        subchunk_enabled=False,
+        llm_rerank_enabled=False,
+    )
+    return RAGEngine(
+        collection_name="g1",
+        parser=FakeParser(),
+        embedder=FakeEmbedder(),
+        indexer=FakeVectorIndexer(),
+        query_rewriter=FakeRewriter([]),
+        knowledge_graph=FakeKnowledgeGraph(),
+        config=cfg,
+    )
+
+
+def test_add_document_incremental_with_metadata(tmp_path):
+    engine = _add_document_engine(tmp_path)
+
+    first = engine.add_document("fake.pdf", "doc_a", "a.pdf")
+    second = engine.add_document("fake.pdf", "doc_b", "b.pdf")
+
+    assert first["total_chunks"] == 4
+    assert second["total_chunks"] == 4
+    assert engine.indexer.count() == 8  # 增量写入，不清空
+    assert all(
+        chunk.get("doc_id") == "doc_a" and chunk.get("filename") == "a.pdf"
+        for chunk in engine.indexer.data[:4]
+    )
+    assert all(
+        chunk.get("doc_id") == "doc_b" and chunk.get("filename") == "b.pdf"
+        for chunk in engine.indexer.data[4:]
+    )

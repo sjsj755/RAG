@@ -33,6 +33,13 @@ def generate_document_id(filename: str) -> str:
     return f"doc_{timestamp}_{unique_part}"
 
 
+def generate_group_id() -> str:
+    """根据时间戳与随机熵生成分组 ID。"""
+    timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+    unique_part = uuid4().hex[:8]
+    return f"group_{timestamp}_{unique_part}"
+
+
 def ensure_dir(path: str) -> Path:
     """确保目录存在，返回目录对象。"""
     p = Path(path)

@@ -69,6 +69,7 @@ function renderResultItems(items) {
           <div class="result-meta">
             <span>相关度 ${item.score == null ? "-" : `${(item.score * 100).toFixed(1)}%`}</span>
             <span>页码 ${item.page_num ?? "-"}</span>
+            ${item.filename ? `<span>来源 ${escapeHtml(item.filename)}</span>` : ""}
             <span>类型 ${escapeHtml(item.type ?? "-")}</span>
           </div>
           ${body}
@@ -78,6 +79,7 @@ function renderResultItems(items) {
 }
 
 let documents = [];
+let groups = [];
 
 async function refreshDocuments() {
   try {
@@ -110,12 +112,39 @@ function renderDocumentTable() {
           <td>${formatTime(doc.created_at)}</td>
           <td style="white-space:nowrap">
             <button class="link" data-action="index" data-id="${doc.id}" ${canIndex ? "" : "disabled"}>索引</button>
+            <button class="link" data-action="group-index" data-id="${doc.id}">编入分组</button>
             <button class="link" data-action="select" data-id="${doc.id}">检索</button>
             <button class="link danger" data-action="delete" data-id="${doc.id}">删除</button>
           </td>
         </tr>`;
     })
     .join("");
+}
+
+function renderGroupOptions() {
+  const select = document.getElementById("group-select");
+  const previous = select.value;
+  select.innerHTML =
+    '<option value="">单文档检索</option>' +
+    groups
+      .map(
+        (group) =>
+          `<option value="${group.id}">${escapeHtml(group.name)}（${group.doc_ids.length}）</option>`
+      )
+      .join("");
+  if (previous && groups.some((group) => group.id === previous)) {
+    select.value = previous;
+  }
+}
+
+async function refreshGroups() {
+  try {
+    groups = await request("/api/v1/groups");
+  } catch (err) {
+    setMsg("doc-msg", `加载分组失败：${err.message}`, "error");
+    return;
+  }
+  renderGroupOptions();
 }
 
 function renderSearchOptions() {
@@ -181,6 +210,26 @@ document.getElementById("upload-form").addEventListener("submit", async (event) 
   }
 });
 
+document.getElementById("create-group-btn").addEventListener("click", async () => {
+  const name = document.getElementById("group-name").value.trim();
+  if (!name) {
+    setMsg("doc-msg", "请输入分组名称", "error");
+    return;
+  }
+  try {
+    const group = await request("/api/v1/groups", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    });
+    document.getElementById("group-name").value = "";
+    setMsg("doc-msg", `分组已创建：${group.name}`, "ok");
+    await refreshGroups();
+  } catch (err) {
+    setMsg("doc-msg", `创建分组失败：${err.message}`, "error");
+  }
+});
+
 document.getElementById("doc-tbody").addEventListener("click", async (event) => {
   const btn = event.target.closest("button[data-action]");
   if (!btn) return;
@@ -195,6 +244,17 @@ document.getElementById("doc-tbody").addEventListener("click", async (event) => 
       document.getElementById("search-doc").value = id;
       document.getElementById("search-query").focus();
       document.getElementById("search-msg").textContent = "";
+    } else if (action === "group-index") {
+      const groupId = document.getElementById("group-select").value;
+      if (!groupId) {
+        setMsg("doc-msg", "请先在上方选择或创建分组", "error");
+        return;
+      }
+      const result = await request(`/api/v1/groups/${groupId}/index/${id}`, {
+        method: "POST",
+      });
+      setMsg("doc-msg", result.message || "编入分组任务已提交", "ok");
+      await refreshGroups();
     } else if (action === "delete") {
       if (!confirm(`确定删除文档 ${id} 及其索引？`)) return;
       await request(`/api/v1/documents/${id}`, { method: "DELETE" });
@@ -208,13 +268,14 @@ document.getElementById("doc-tbody").addEventListener("click", async (event) => 
 
 document.getElementById("search-btn").addEventListener("click", async () => {
   const docId = document.getElementById("search-doc").value;
+  const groupId = document.getElementById("group-select").value;
   const query = document.getElementById("search-query").value.trim();
   const topK = Number(document.getElementById("search-topk").value || 5);
   const resultsBox = document.getElementById("results");
   const answerBox = document.getElementById("answer-area");
 
-  if (!docId) {
-    setMsg("search-msg", "请先选择文档", "error");
+  if (!docId && !groupId) {
+    setMsg("search-msg", "请先选择文档或分组", "error");
     return;
   }
   if (!query) {
@@ -226,7 +287,10 @@ document.getElementById("search-btn").addEventListener("click", async () => {
   answerBox.innerHTML = "";
   setMsg("search-msg", "检索中…");
   try {
-    const data = await request(`/api/v1/search/${docId}`, {
+    const url = groupId
+      ? `/api/v1/groups/${groupId}/search`
+      : `/api/v1/search/${docId}`;
+    const data = await request(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ query, top_k: topK }),
@@ -261,14 +325,15 @@ document.getElementById("search-btn").addEventListener("click", async () => {
 
 document.getElementById("answer-btn").addEventListener("click", async () => {
   const docId = document.getElementById("search-doc").value;
+  const groupId = document.getElementById("group-select").value;
   const query = document.getElementById("search-query").value.trim();
   const topK = Number(document.getElementById("search-topk").value || 5);
   const answerBox = document.getElementById("answer-area");
   const resultsBox = document.getElementById("results");
   const btn = document.getElementById("answer-btn");
 
-  if (!docId) {
-    setMsg("search-msg", "请先选择文档", "error");
+  if (!docId && !groupId) {
+    setMsg("search-msg", "请先选择文档或分组", "error");
     return;
   }
   if (!query) {
@@ -312,7 +377,10 @@ document.getElementById("answer-btn").addEventListener("click", async () => {
   };
 
   try {
-    const resp = await fetch(`/api/v1/answer/${docId}?stream=true`, {
+    const url = groupId
+      ? `/api/v1/groups/${groupId}/answer?stream=true`
+      : `/api/v1/answer/${docId}?stream=true`;
+    const resp = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ query, top_k: topK }),
@@ -392,5 +460,6 @@ async function checkHealth() {
 }
 
 refreshDocuments();
+refreshGroups();
 checkHealth();
 setInterval(refreshDocuments, 3000);

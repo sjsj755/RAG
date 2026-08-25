@@ -79,9 +79,15 @@ class LLMAnswerGenerator:
         blocks = []
         for source in sources:
             text = (source.get("text") or "").replace("\n", " ").strip()
+            label = source.get("filename") or source.get("doc_id") or ""
+            location = (
+                f"{label} 第{source.get('page_num')}页"
+                if label
+                else f"第{source.get('page_num')}页"
+            )
             blocks.append(
                 f"[{source.get('index')}] "
-                f"(第{source.get('page_num')}页) {text[:self._source_max_chars]}"
+                f"({location}) {text[:self._source_max_chars]}"
             )
         user_content = f"问题：{query}\n\n教材片段：\n" + "\n".join(blocks)
         return [

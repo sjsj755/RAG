@@ -25,6 +25,8 @@ from src.core.models import (
     DeleteResponse,
     DocumentInfo,
     DocumentStatus,
+    GroupCreateRequest,
+    GroupInfo,
     IndexResponse,
     SearchRequest,
     SearchResponse,
@@ -315,6 +317,215 @@ def answer_document(
         result = kb.answer(doc_id, request.query, request.top_k)
     except Exception as e:
         logger.exception(f"答案生成失败: {e}")
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY, "答案生成失败，请稍后重试"
+        )
+    return AnswerResponse(**result)
+
+
+def _group_answer_event_source(
+    kb: KnowledgeBaseService, group_id: str, query: str, top_k: int
+):
+    """把分组流式答案事件序列编码为 SSE data 行。"""
+    try:
+        for event in kb.group_stream_answer(group_id, query, top_k):
+            yield (
+                "data: "
+                f"{json.dumps(event, ensure_ascii=False, separators=(',', ':'))}\n\n"
+            )
+    except Exception as e:
+        logger.exception(f"分组流式答案生成失败: {e}")
+        payload = json.dumps(
+            {"type": "error", "detail": "答案生成失败，请稍后重试"},
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        yield f"data: {payload}\n\n"
+
+
+@router.post("/groups", response_model=GroupInfo, status_code=status.HTTP_201_CREATED)
+def create_group(
+    request: GroupCreateRequest,
+    kb: KnowledgeBaseService = Depends(get_knowledge_base),
+):
+    """创建命名分组。"""
+    return kb.create_group(request.name)
+
+
+@router.get("/groups", response_model=list[GroupInfo])
+def list_groups(
+    kb: KnowledgeBaseService = Depends(get_knowledge_base),
+):
+    """列出全部分组。"""
+    return kb.list_groups()
+
+
+@router.get("/groups/{group_id}", response_model=GroupInfo)
+def get_group(
+    group_id: str,
+    kb: KnowledgeBaseService = Depends(get_knowledge_base),
+):
+    """获取分组详情。"""
+    group = kb.get_group(group_id)
+    if not group:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"分组不存在: {group_id}")
+    return group
+
+
+@router.delete("/groups/{group_id}", response_model=DeleteResponse)
+def delete_group(
+    group_id: str,
+    kb: KnowledgeBaseService = Depends(get_knowledge_base),
+):
+    """删除分组（成员文档标记为 pending）。"""
+    if not kb.get_group(group_id):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"分组不存在: {group_id}")
+    kb.delete_group(group_id)
+    return DeleteResponse(status="deleted", document_id=group_id)
+
+
+@router.post(
+    "/groups/{group_id}/index/{doc_id}",
+    response_model=IndexResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def index_document_into_group(
+    group_id: str,
+    doc_id: str,
+    background_tasks: BackgroundTasks,
+    kb: KnowledgeBaseService = Depends(get_knowledge_base),
+    storage: FileStorage = Depends(get_file_storage),
+):
+    """把文档编入分组（后台处理）。"""
+    group = kb.get_group(group_id)
+    if not group:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"分组不存在: {group_id}")
+    doc_info = kb.get_document_info(doc_id)
+    if not doc_info:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"文档不存在: {doc_id}")
+    if doc_info.status == DocumentStatus.PROCESSING:
+        raise HTTPException(status.HTTP_409_CONFLICT, "文档正在处理中")
+    if doc_id in group.doc_ids:
+        return IndexResponse(
+            document_id=doc_id,
+            status="already_in_group",
+            total_chunks=doc_info.total_chunks,
+            message="文档已在分组中",
+        )
+    if not storage.exists(doc_id):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "文件不存在")
+
+    def process() -> None:
+        try:
+            kb.index_into_group(group_id, doc_id, str(storage.path_for(doc_id)))
+            logger.info(f"文档 {doc_id} 编入分组 {group_id} 完成")
+        except Exception as e:
+            logger.exception(f"文档 {doc_id} 编入分组失败: {e}")
+
+    background_tasks.add_task(process)
+    return IndexResponse(
+        document_id=doc_id,
+        status="processing",
+        total_chunks=0,
+        message="编入分组任务已提交",
+    )
+
+
+@router.delete(
+    "/groups/{group_id}/documents/{doc_id}",
+    response_model=DeleteResponse,
+)
+def remove_document_from_group(
+    group_id: str,
+    doc_id: str,
+    kb: KnowledgeBaseService = Depends(get_knowledge_base),
+):
+    """把文档移出分组（文档标记为 pending）。"""
+    group = kb.get_group(group_id)
+    if not group:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"分组不存在: {group_id}")
+    if doc_id not in group.doc_ids:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, f"文档不在分组中: {doc_id}"
+        )
+    kb.group_remove_document(group_id, doc_id)
+    return DeleteResponse(status="removed", document_id=doc_id)
+
+
+@router.post("/groups/{group_id}/migrate", status_code=status.HTTP_202_ACCEPTED)
+async def migrate_group(
+    group_id: str,
+    background_tasks: BackgroundTasks,
+    kb: KnowledgeBaseService = Depends(get_knowledge_base),
+):
+    """把全部已索引文档迁移进分组（后台处理，不触发 OCR）。"""
+    if not kb.get_group(group_id):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"分组不存在: {group_id}")
+
+    def process() -> None:
+        try:
+            result = kb.migrate_group(group_id)
+            logger.info(
+                f"分组 {group_id} 迁移完成: "
+                f"{result['succeeded']}/{result['total']}"
+            )
+        except Exception as e:
+            logger.exception(f"分组 {group_id} 迁移失败: {e}")
+
+    background_tasks.add_task(process)
+    return {
+        "status": "processing",
+        "group_id": group_id,
+        "message": "迁移任务已提交",
+    }
+
+
+@router.post("/groups/{group_id}/search", response_model=SearchResponse)
+def search_group(
+    group_id: str,
+    request: SearchRequest,
+    kb: KnowledgeBaseService = Depends(get_knowledge_base),
+):
+    """在分组共享集合中检索。"""
+    if not kb.get_group(group_id):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"分组不存在: {group_id}")
+    outcome = kb.group_search_with_confidence(
+        group_id, request.query, request.top_k
+    )
+    return SearchResponse(
+        query=request.query,
+        results=[ChunkResponse(**result) for result in outcome["results"]],
+        total=len(outcome["results"]),
+        confidence=outcome["confidence"],
+        refused=outcome["refused"],
+    )
+
+
+@router.post("/groups/{group_id}/answer", response_model=AnswerResponse)
+def answer_group(
+    group_id: str,
+    request: AnswerRequest,
+    kb: KnowledgeBaseService = Depends(get_knowledge_base),
+    stream: bool = Query(default=False),
+):
+    """分组检索并生成答案；stream=true 时 SSE 流式。"""
+    if not kb.get_group(group_id):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"分组不存在: {group_id}")
+    if stream:
+        return StreamingResponse(
+            _group_answer_event_source(
+                kb, group_id, request.query, request.top_k
+            ),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+            },
+        )
+    try:
+        result = kb.group_answer(group_id, request.query, request.top_k)
+    except Exception as e:
+        logger.exception(f"分组答案生成失败: {e}")
         raise HTTPException(
             status.HTTP_502_BAD_GATEWAY, "答案生成失败，请稍后重试"
         )

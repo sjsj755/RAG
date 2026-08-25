@@ -720,8 +720,8 @@ name = "httpcore2"
 version = "2.12.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "h11" },
-    { name = "truststore" },
+    { name = "h11", marker = "sys_platform != 'emscripten'" },
+    { name = "truststore", marker = "sys_platform != 'emscripten'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/be/ad/f4f0e57345f1870f3e8cb624e058d7eca6e5a27d33bcc3311d9b618734cd/httpcore2-2.12.0.tar.gz", hash = "sha256:9293522bba0aa7c4c8e9e3f040c16575bd8868e155a77fa30c7a9085a5eae648", size = 67548, upload-time = "2026-08-18T13:22:08.211Z" }
 wheels = [
@@ -1643,6 +1643,15 @@ wheels = [
 ]
 
 [[package]]
+name = "path"
+version = "17.1.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/dd/52/a7bdd5ef8488977d354b7915d1e75009bebbd04f73eff14e52372d5e9435/path-17.1.1.tar.gz", hash = "sha256:2dfcbfec8b4d960f3469c52acf133113c2a8bf12ac7b98d629fa91af87248d42", size = 50528, upload-time = "2025-07-27T20:40:23.79Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/7c/50/11c9ee1ede64b45d687fd36eb8768dafc57afc78b4d83396920cfd69ed30/path-17.1.1-py3-none-any.whl", hash = "sha256:ec7e136df29172e5030dd07e037d55f676bdb29d15bfa09b80da29d07d3b9303", size = 23936, upload-time = "2025-07-27T20:40:22.453Z" },
+]
+
+[[package]]
 name = "pillow"
 version = "12.3.0"
 source = { registry = "https://pypi.org/simple" }
@@ -2173,6 +2182,7 @@ dependencies = [
     { name = "loguru" },
     { name = "openai" },
     { name = "paddleocr" },
+    { name = "path" },
     { name = "pillow" },
     { name = "pydantic-settings" },
     { name = "pypdf" },
@@ -2199,6 +2209,7 @@ requires-dist = [
     { name = "loguru", specifier = ">=0.7.3" },
     { name = "openai", specifier = ">=3.3.1" },
     { name = "paddleocr", specifier = ">=3.7.0" },
+    { name = "path", specifier = ">=17.1.1" },
     { name = "pillow", specifier = ">=12.3.0" },
     { name = "pydantic-settings", specifier = ">=2.3.0" },
     { name = "pypdf", specifier = ">=6.16.1" },

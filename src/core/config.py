@@ -8,6 +8,7 @@
 """
 
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -17,7 +18,7 @@ class Settings(BaseSettings):
     """全局应用配置。"""
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=(Path(__file__).resolve().parents[2] / ".env"),
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",
@@ -45,6 +46,7 @@ class Settings(BaseSettings):
     chroma_persist_dir: str = Field(default="chroma_db")
     log_dir: str = Field(default="logs")
     registry_file: str = Field(default="registry.json")
+    groups_file: str = Field(default="groups.json")
 
     # ---------- CORS ----------
     # 逗号分隔的允许来源列表，例如: http://localhost:5173,http://localhost:3000

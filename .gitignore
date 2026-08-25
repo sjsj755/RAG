@@ -15,6 +15,7 @@ uploads/
 chroma_db/
 logs/
 registry.json
+groups.json
 eval_results*.json
 eval_report*.json
 eval_human_review*.json

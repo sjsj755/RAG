@@ -45,6 +45,11 @@
       <h2>语义检索</h2>
       <div class="row">
         <select id="search-doc" aria-label="选择文档"></select>
+        <select id="group-select" aria-label="选择分组">
+          <option value="">单文档检索</option>
+        </select>
+        <input type="text" id="group-name" placeholder="新分组名" style="min-width: 100px">
+        <button type="button" id="create-group-btn">建组</button>
         <input type="text" id="search-query" placeholder="输入问题，例如：什么是函数？" required>
         <input type="number" id="search-topk" value="5" min="1" max="20" title="返回条数">
         <button type="button" id="search-btn">检索</button>

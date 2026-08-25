@@ -155,6 +155,36 @@ class RuleKnowledgeGraph:
             logger.error(f"知识图谱文件损坏，已忽略: {e}")
             self._reset()
 
+    def load_many(
+        self,
+        doc_kg_paths: list[tuple[str, Path]],
+        doc_names: dict[str, str] | None = None,
+    ) -> None:
+        """合并多文档 KG：各文档块标记 doc_id 后重建映射。
+
+        doc_kg_paths 为 (doc_id, KG 文件路径) 列表；doc_names 提供 doc_id → 文件名；
+        缺失/损坏文件跳过。
+        """
+        doc_names = doc_names or {}
+        chunks: list[dict[str, Any]] = []
+        for doc_id, path in doc_kg_paths:
+            file = Path(path)
+            if not file.exists():
+                logger.warning(f"跳过缺失的文档 KG: {file}")
+                continue
+            try:
+                data = json.loads(file.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, TypeError, ValueError) as e:
+                logger.error(f"文档 KG 损坏，已跳过 {file}: {e}")
+                continue
+            for chunk in data.get("chunks", {}).values():
+                item = dict(chunk)
+                item["doc_id"] = doc_id
+                if doc_id in doc_names:
+                    item["filename"] = doc_names[doc_id]
+                chunks.append(item)
+        self.build(chunks)
+
     def _reset(self) -> None:
         self._chunks = {}
         self._concept_to_chunks = {}

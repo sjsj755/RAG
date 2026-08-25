@@ -22,6 +22,8 @@ class ChunkResponse(BaseModel):
     block_id: str | int | None = None
     # 命中子块原文（未子块化时为 None），text 始终为完整父块
     fragment: str | None = None
+    doc_id: str | None = None
+    filename: str | None = None
 
 
 class SearchRequest(BaseModel):
@@ -43,6 +45,8 @@ class CitationSource(BaseModel):
     page_num: int = 0
     text: str
     score: float | None = None
+    doc_id: str | None = None
+    filename: str | None = None
 
 
 class AnswerRequest(BaseModel):
@@ -57,6 +61,18 @@ class AnswerResponse(BaseModel):
     refusal_reason: str | None = None
     confidence: float | None = None
     sources: list[CitationSource] = []
+
+
+class GroupInfo(BaseModel):
+    id: str
+    name: str
+    doc_ids: list[str] = []
+    created_at: datetime
+    updated_at: datetime
+
+
+class GroupCreateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
 
 
 class DocumentInfo(BaseModel):

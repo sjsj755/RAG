@@ -142,6 +142,56 @@ class RAGEngine:
             "collection": self.collection_name,
         }
 
+    def add_document(
+        self, pdf_path: str, doc_id: str, filename: str
+    ) -> dict[str, Any]:
+        """把单个文档增量写入共享集合（分组模式），不清空现有块。
+
+        返回 {"total_chunks", "parent_chunks", "chunks"}，chunks 为父块列表。
+        """
+        logger.info(f"增量写入文档到共享集合 {self.collection_name}: {doc_id}")
+        pages = self.parser.parse(pdf_path)
+        chunks = self.chunker.chunk(pages)
+        if not chunks:
+            raise ValueError("PDF中未提取到任何内容块")
+
+        if self._subchunk_enabled:
+            subchunks = self.chunker.build_subchunks(
+                chunks, self._subchunk_max_tokens
+            )
+            for sub in subchunks:
+                sub["text"] = normalize_math_text(sub["text"])
+                sub["doc_id"] = doc_id
+                sub["filename"] = filename
+            texts = [sub["text"] for sub in subchunks]
+            embeddings = self.embedder.embed(texts)
+            self.indexer.add(subchunks, embeddings)
+            self._is_indexed = True
+            self._bm25 = None
+            return {
+                "total_chunks": len(subchunks),
+                "parent_chunks": len(chunks),
+                "chunks": chunks,
+            }
+
+        for chunk in chunks:
+            chunk["doc_id"] = doc_id
+            chunk["filename"] = filename
+        texts = [chunk["text"] for chunk in chunks]
+        embeddings = self.embedder.embed(texts)
+        self.indexer.add(chunks, embeddings)
+        self._is_indexed = True
+        self._bm25 = None
+        return {
+            "total_chunks": len(chunks),
+            "parent_chunks": len(chunks),
+            "chunks": chunks,
+        }
+
+    def invalidate_bm25(self) -> None:
+        """失效 BM25 缓存，下次检索时从集合重建。"""
+        self._bm25 = None
+
     # ---------- 检索 ----------
 
     def search(self, query: str, top_k: int = 5) -> list[dict[str, Any]]:

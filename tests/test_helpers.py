@@ -23,6 +23,8 @@ def test_to_dict_pydantic_model():
         "score": None,
         "block_id": None,
         "fragment": None,
+        "doc_id": None,
+        "filename": None,
     }
 
 

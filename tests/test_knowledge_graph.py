@@ -73,3 +73,41 @@ def test_save_load_roundtrip(tmp_path):
 def test_empty_graph_returns_empty():
     graph = RuleKnowledgeGraph()
     assert graph.query_candidates("函数", top_k=3) == []
+
+
+def test_load_many_merges_docs_with_doc_id(tmp_path):
+    path_a = tmp_path / "doc_a.kg.json"
+    path_b = tmp_path / "doc_b.kg.json"
+    graph_a = RuleKnowledgeGraph()
+    graph_a.build(make_chunks())
+    graph_a.save(path_a)
+    graph_b = RuleKnowledgeGraph()
+    graph_b.build(
+        [
+            {
+                "text": "三角函数的周期性很重要。",
+                "type": "text",
+                "page_num": 20,
+                "block_id": "1",
+            }
+        ]
+    )
+    graph_b.save(path_b)
+
+    merged = RuleKnowledgeGraph()
+    merged.load_many(
+        [("doc_a", path_a), ("doc_b", path_b)],
+        doc_names={"doc_a": "a.pdf", "doc_b": "b.pdf"},
+    )
+
+    candidates = merged.query_candidates("函数", top_k=10)
+    assert candidates
+    assert any(c.get("doc_id") == "doc_a" for c in candidates)
+    assert any(c.get("doc_id") == "doc_b" for c in candidates)
+    assert any(c.get("filename") == "a.pdf" for c in candidates)
+
+
+def test_load_many_skips_missing_files(tmp_path):
+    merged = RuleKnowledgeGraph()
+    merged.load_many([("doc_x", tmp_path / "missing.json")])
+    assert merged.query_candidates("函数", top_k=3) == []

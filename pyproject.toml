@@ -21,6 +21,7 @@ dependencies = [
     "pypdf>=6.16.1",
     "rank-bm25>=0.2.2",
     "tiktoken>=0.8.0",
+    "path>=17.1.1",
 ]
 
 [project.scripts]

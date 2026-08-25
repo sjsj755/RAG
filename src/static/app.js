@@ -109,16 +109,43 @@ document.getElementById("upload-form").addEventListener("submit", async (event) 
   event.preventDefault();
   const fileInput = document.getElementById("file-input");
   const btn = document.getElementById("upload-btn");
-  if (!fileInput.files.length) return;
+  const files = Array.from(fileInput.files || []);
+  if (!files.length) return;
 
   const formData = new FormData();
-  formData.append("file", fileInput.files[0]);
+  for (const file of files) {
+    formData.append("files", file);
+  }
 
   btn.disabled = true;
   setMsg("upload-msg", "上传中…");
+  const resultsBox = document.getElementById("upload-results");
+  resultsBox.innerHTML = "";
   try {
-    const doc = await request("/api/v1/upload", { method: "POST", body: formData });
-    setMsg("upload-msg", `上传成功：${doc.filename}（${doc.id}）`, "ok");
+    const data = await request("/api/v1/upload/batch", {
+      method: "POST",
+      body: formData,
+    });
+    resultsBox.innerHTML = data.results
+      .map((item) => {
+        const ok = item.status === "uploaded";
+        return `
+          <div class="result-item">
+            <div class="result-meta">
+              <span>${ok ? "✅ 成功" : "❌ 失败"}</span>
+              <span>${escapeHtml(item.filename)}</span>
+              ${item.doc_id ? `<span>${escapeHtml(item.doc_id)}</span>` : ""}
+              ${item.file_size ? `<span>${formatSize(item.file_size)}</span>` : ""}
+            </div>
+            ${item.error ? `<p class="result-text">${escapeHtml(item.error)}</p>` : ""}
+          </div>`;
+      })
+      .join("");
+    setMsg(
+      "upload-msg",
+      `上传完成：成功 ${data.succeeded} / 失败 ${data.failed}`,
+      data.failed ? "error" : "ok"
+    );
     fileInput.value = "";
     await refreshDocuments();
   } catch (err) {

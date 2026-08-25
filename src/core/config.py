@@ -37,6 +37,8 @@ class Settings(BaseSettings):
         le=2048,
         validation_alias=AliasChoices("MAX_UPLOAD_SIZE_MB", "MAX_UPLOAD_SIZE"),
     )
+    # 单次批量上传的文件数上限
+    max_batch_files: int = Field(default=20, ge=1, le=100)
 
     # ---------- 目录 ----------
     upload_dir: str = Field(default="uploads")

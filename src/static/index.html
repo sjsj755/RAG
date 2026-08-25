@@ -16,10 +16,11 @@
     <section class="card">
       <h2>上传 PDF</h2>
       <form id="upload-form" class="row">
-        <input type="file" id="file-input" accept=".pdf" required>
-        <button type="submit" id="upload-btn">上传</button>
+        <input type="file" id="file-input" accept=".pdf" multiple required>
+        <button type="submit" id="upload-btn">上传（可多选）</button>
       </form>
       <p id="upload-msg" class="msg"></p>
+      <div id="upload-results"></div>
     </section>
 
     <section class="card">

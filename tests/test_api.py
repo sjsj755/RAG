@@ -121,14 +121,97 @@ def test_upload_success_creates_doc_and_file(client, tmp_path):
     assert saved.read_bytes() == pdf_bytes
 
 
+def test_upload_rejects_fake_pdf(client):
+    test_client, _ = client
+    response = test_client.post(
+        "/api/v1/upload",
+        files={"file": ("fake.pdf", b"not a real pdf", "application/pdf")},
+    )
+    assert response.status_code == 400
+    assert "不是有效的 PDF 文件" in response.json()["detail"]
+
+
+def test_upload_rejects_empty_file(client):
+    test_client, _ = client
+    response = test_client.post(
+        "/api/v1/upload",
+        files={"file": ("empty.pdf", b"", "application/pdf")},
+    )
+    assert response.status_code == 400
+    assert "文件为空" in response.json()["detail"]
+
+
 def test_upload_too_large(client):
     test_client, _ = client
-    big_bytes = b"x" * (6 * 1024 * 1024)  # 6MB > 5MB 限制
+    big_bytes = b"%PDF-1.4 " + b"x" * (6 * 1024 * 1024)  # 合法头 + 6MB > 5MB
     response = test_client.post(
         "/api/v1/upload",
         files={"file": ("big.pdf", big_bytes, "application/pdf")},
     )
     assert response.status_code == 413
+
+
+def test_batch_upload_success(client):
+    test_client, fake = client
+    pdf_bytes = b"%PDF-1.4 fake content"
+    response = test_client.post(
+        "/api/v1/upload/batch",
+        files=[
+            ("files", ("math1.pdf", pdf_bytes, "application/pdf")),
+            ("files", ("math2.pdf", pdf_bytes, "application/pdf")),
+        ],
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 2
+    assert body["succeeded"] == 2
+    assert body["failed"] == 0
+    assert all(item["status"] == "uploaded" for item in body["results"])
+    assert all(item["doc_id"] for item in body["results"])
+    assert len(fake.docs) == 2
+
+
+def test_batch_upload_partial_failure_isolated(client):
+    test_client, fake = client
+    response = test_client.post(
+        "/api/v1/upload/batch",
+        files=[
+            ("files", ("good.pdf", b"%PDF-1.4 ok", "application/pdf")),
+            ("files", ("notes.txt", b"hello", "text/plain")),
+            ("files", ("fake.pdf", b"not a pdf", "application/pdf")),
+            ("files", ("empty.pdf", b"", "application/pdf")),
+        ],
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 4
+    assert body["succeeded"] == 1
+    assert body["failed"] == 3
+
+    by_name = {item["filename"]: item for item in body["results"]}
+    assert by_name["good.pdf"]["status"] == "uploaded"
+    assert by_name["notes.txt"]["status"] == "rejected"
+    assert "仅支持 PDF 文件" in by_name["notes.txt"]["error"]
+    assert "不是有效的 PDF 文件" in by_name["fake.pdf"]["error"]
+    assert "文件为空" in by_name["empty.pdf"]["error"]
+
+    # 失败项不残留注册表记录
+    assert len(fake.docs) == 1
+
+
+def test_batch_upload_too_many_files(client, monkeypatch):
+    test_client, _ = client
+    monkeypatch.setattr(settings, "max_batch_files", 2)
+    pdf_bytes = b"%PDF-1.4 fake"
+    response = test_client.post(
+        "/api/v1/upload/batch",
+        files=[
+            ("files", (f"m{i}.pdf", pdf_bytes, "application/pdf"))
+            for i in range(3)
+        ],
+    )
+    assert response.status_code == 400
+    assert "一次最多上传 2 个文件" in response.json()["detail"]
 
 
 def test_index_unknown_doc_404(client):

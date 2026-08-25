@@ -67,6 +67,23 @@ class DeleteResponse(BaseModel):
     document_id: str
 
 
+class BatchUploadItem(BaseModel):
+    """批量上传中的单个文件结果。"""
+
+    filename: str
+    status: str  # uploaded | rejected
+    doc_id: str | None = None
+    file_size: int = 0
+    error: str | None = None
+
+
+class BatchUploadResponse(BaseModel):
+    total: int
+    succeeded: int
+    failed: int
+    results: list[BatchUploadItem]
+
+
 class ErrorResponse(BaseModel):
     detail: str
     code: str | None = None

@@ -13,6 +13,8 @@ from fastapi import (
 from src.api.dependencies import get_app_settings, get_file_storage, get_knowledge_base
 from src.core.config import Settings
 from src.core.models import (
+    BatchUploadItem,
+    BatchUploadResponse,
     ChunkResponse,
     DeleteResponse,
     DocumentInfo,
@@ -28,14 +30,14 @@ from src.utils.logger import logger
 
 router = APIRouter(prefix="/api/v1", tags=["RAG"])
 
+_PDF_MAGIC = b"%PDF-"
 
-def _validate_pdf(file: UploadFile, max_upload_size_mb: int) -> int:
-    """校验文件类型与大小，返回允许的最大字节数。"""
+
+async def _validate_pdf(file: UploadFile, max_upload_size_mb: int) -> int:
+    """校验文件类型、魔数、空文件与大小，返回允许的最大字节数。"""
     filename = file.filename or ""
     if not filename.lower().endswith(".pdf"):
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST, "仅支持 PDF 文件"
-        )
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "仅支持 PDF 文件")
 
     max_bytes = max_upload_size_mb * 1024 * 1024
 
@@ -46,12 +48,55 @@ def _validate_pdf(file: UploadFile, max_upload_size_mb: int) -> int:
             declared_size = int(content_length)
         except ValueError:
             declared_size = 0
+        if declared_size == 0:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "文件为空")
         if declared_size > max_bytes:
             raise HTTPException(
                 status.HTTP_413_CONTENT_TOO_LARGE,
                 f"文件大小超过限制 ({max_upload_size_mb}MB)",
             )
+
+    # 魔数校验：读取前 5 字节后复位游标，不影响后续流式写入
+    head = await file.read(len(_PDF_MAGIC))
+    await file.seek(0)
+    if not head:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "文件为空")
+    if head != _PDF_MAGIC:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, "不是有效的 PDF 文件"
+        )
     return max_bytes
+
+
+async def _save_upload(
+    file: UploadFile,
+    kb: KnowledgeBaseService,
+    storage: FileStorage,
+    max_bytes: int,
+) -> DocumentInfo:
+    """创建记录、流式保存文件，失败时回滚记录。"""
+    doc_id = kb.create_document(file.filename or "unnamed.pdf", 0)
+    try:
+        written = await storage.save(doc_id, file.read, max_bytes)
+        if written == 0:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "文件为空")
+    except FileTooLargeError:
+        kb.delete_document(doc_id)
+        raise HTTPException(
+            status.HTTP_413_CONTENT_TOO_LARGE,
+            f"文件大小超过限制 ({max_bytes // 1024 // 1024}MB)",
+        )
+    except HTTPException:
+        kb.delete_document(doc_id)
+        raise
+    except Exception:
+        kb.delete_document(doc_id)
+        raise
+
+    kb.update_document_file_size(doc_id, written)
+    doc = kb.get_document_info(doc_id)
+    assert doc is not None
+    return doc
 
 
 @router.post(
@@ -66,25 +111,66 @@ async def upload_pdf(
     settings: Settings = Depends(get_app_settings),
 ):
     """上传 PDF 文件并创建文档记录。"""
-    max_bytes = _validate_pdf(file, settings.max_upload_size_mb)
+    max_bytes = await _validate_pdf(file, settings.max_upload_size_mb)
+    return await _save_upload(file, kb, storage, max_bytes)
 
-    doc_id = kb.create_document(file.filename or "unnamed.pdf", 0)
-    try:
-        written = await storage.save(doc_id, file.read, max_bytes)
-    except FileTooLargeError:
-        kb.delete_document(doc_id)
+
+@router.post(
+    "/upload/batch",
+    response_model=BatchUploadResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def upload_pdf_batch(
+    files: list[UploadFile] = File(...),
+    kb: KnowledgeBaseService = Depends(get_knowledge_base),
+    storage: FileStorage = Depends(get_file_storage),
+    settings: Settings = Depends(get_app_settings),
+):
+    """批量上传 PDF：串行处理，单文件失败不影响其他文件。"""
+    if len(files) > settings.max_batch_files:
         raise HTTPException(
-            status.HTTP_413_CONTENT_TOO_LARGE,
-            f"文件大小超过限制 ({settings.max_upload_size_mb}MB)",
+            status.HTTP_400_BAD_REQUEST,
+            f"一次最多上传 {settings.max_batch_files} 个文件",
         )
-    except Exception:
-        kb.delete_document(doc_id)
-        raise
 
-    kb.update_document_file_size(doc_id, written)
-    doc = kb.get_document_info(doc_id)
-    assert doc is not None
-    return doc
+    results: list[BatchUploadItem] = []
+    for file in files:
+        filename = file.filename or "unnamed.pdf"
+        try:
+            max_bytes = await _validate_pdf(file, settings.max_upload_size_mb)
+            doc = await _save_upload(file, kb, storage, max_bytes)
+            results.append(
+                BatchUploadItem(
+                    filename=filename,
+                    status="uploaded",
+                    doc_id=doc.id,
+                    file_size=doc.file_size,
+                )
+            )
+        except HTTPException as e:
+            detail = e.detail if isinstance(e.detail, str) else str(e.detail)
+            results.append(
+                BatchUploadItem(
+                    filename=filename, status="rejected", error=detail
+                )
+            )
+        except Exception as e:
+            logger.exception(f"批量上传文件失败: {filename}: {e}")
+            results.append(
+                BatchUploadItem(
+                    filename=filename,
+                    status="rejected",
+                    error="上传失败，请稍后重试",
+                )
+            )
+
+    succeeded = sum(1 for item in results if item.status == "uploaded")
+    return BatchUploadResponse(
+        total=len(results),
+        succeeded=succeeded,
+        failed=len(results) - succeeded,
+        results=results,
+    )
 
 
 @router.post(

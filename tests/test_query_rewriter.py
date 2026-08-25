@@ -1,7 +1,12 @@
 import pytest
 
 from src.core.config import Settings
-from src.core.query_rewriter import DeepSeekQueryRewriter, _cosine
+from src.core.query_rewriter import (
+    _EXAMPLES,
+    _SYSTEM_PROMPT,
+    DeepSeekQueryRewriter,
+    _cosine,
+)
 
 
 def make_config(**overrides) -> Settings:
@@ -49,6 +54,62 @@ def test_parse_json_list():
     assert DeepSeekQueryRewriter._parse_json_list("a\nb") == ["a", "b"]
     # 非 JSON 时降级为逐行提取
     assert DeepSeekQueryRewriter._parse_json_list("not json") == ["not json"]
+
+
+def test_system_prompt_contains_care_sections():
+    prompt = _SYSTEM_PROMPT.format(count=2)
+    for section in ("CONTEXT", "ASK", "RULES", "EXAMPLES"):
+        assert section in prompt
+
+
+def test_parse_cleans_dedupes_and_truncates():
+    long_text = "长" * 201
+    parsed = DeepSeekQueryRewriter._parse_json_list(
+        f'[" 变体 ", "变体", "", "   ", "变体", "{long_text}"]'
+    )
+    assert parsed == ["变体"]
+
+
+def test_generate_builds_few_shot_messages(monkeypatch):
+    rewriter = DeepSeekQueryRewriter(config=make_config(), embedder=None)
+    captured = {}
+
+    class FakeClient:
+        def __init__(self):
+            self.rewriter = rewriter
+
+        class Completions:
+            def __init__(self, client):
+                self.client = client
+
+            def create(self, **kwargs):
+                captured["messages"] = kwargs["messages"]
+                captured["temperature"] = kwargs["temperature"]
+                message = type("Message", (), {"content": '["改写一"]'})()
+                choice = type("Choice", (), {"message": message})()
+                return type("Response", (), {"choices": [choice]})()
+
+        @property
+        def chat(self):
+            return type("Chat", (), {"completions": self.Completions(self)})()
+
+    monkeypatch.setattr(rewriter, "_client", FakeClient())
+    assert rewriter._generate("原始问题") == ["改写一"]
+
+    messages = captured["messages"]
+    assert messages[0]["role"] == "system"
+    assert len(messages) == 1 + 2 * len(_EXAMPLES) + 1
+    assert messages[-1] == {"role": "user", "content": "原始问题"}
+    for i, (example_query, example_output) in enumerate(_EXAMPLES):
+        assert messages[1 + i * 2] == {
+            "role": "user",
+            "content": example_query,
+        }
+        assert messages[2 + i * 2] == {
+            "role": "assistant",
+            "content": example_output,
+        }
+    assert captured["temperature"] == 0.2
 
 
 def test_filter_keeps_above_threshold():
